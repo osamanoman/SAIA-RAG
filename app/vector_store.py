@@ -8,13 +8,15 @@ Provides global instance pattern for connection pooling and performance.
 from functools import lru_cache
 from typing import List, Dict, Any, Optional
 import asyncio
+import uuid
+import hashlib
 from datetime import datetime
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    PointStruct, 
-    VectorParams, 
-    Distance, 
+    PointStruct,
+    VectorParams,
+    Distance,
     Filter,
     FieldCondition,
     MatchValue,
@@ -342,6 +344,298 @@ class QdrantVectorStore:
                 "Failed to delete points",
                 collection_name=self.collection_name,
                 point_ids_count=len(point_ids),
+                error=str(e)
+            )
+            raise
+
+    # === DOCUMENT-SPECIFIC OPERATIONS ===
+
+    def index_document_chunks(
+        self,
+        document_id: str,
+        chunks: List[Dict[str, Any]],
+        embeddings: List[List[float]]
+    ) -> Dict[str, Any]:
+        """
+        Index document chunks with embeddings into the vector store.
+
+        Args:
+            document_id: Unique document identifier
+            chunks: List of document chunks with metadata
+            embeddings: List of embedding vectors for each chunk
+
+        Returns:
+            Indexing operation result
+
+        Raises:
+            ValueError: If chunks and embeddings length mismatch
+            Exception: If indexing operation fails
+        """
+        if len(chunks) != len(embeddings):
+            raise ValueError(f"Chunks count ({len(chunks)}) must match embeddings count ({len(embeddings)})")
+
+        try:
+            # Create points for each chunk
+            points = []
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                # Generate unique point ID for this chunk
+                chunk_id = f"{document_id}_chunk_{i}"
+                point_id = str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
+
+                # Create payload with document and chunk metadata
+                payload = {
+                    "document_id": document_id,
+                    "chunk_id": chunk_id,
+                    "chunk_index": i,
+                    "text": chunk.get("text", ""),
+                    "metadata": chunk.get("metadata", {}),
+                    "indexed_at": datetime.utcnow().isoformat()
+                }
+
+                # Add any additional chunk metadata
+                if "title" in chunk:
+                    payload["title"] = chunk["title"]
+                if "category" in chunk:
+                    payload["category"] = chunk["category"]
+                if "tags" in chunk:
+                    payload["tags"] = chunk["tags"]
+
+                points.append(PointStruct(
+                    id=point_id,
+                    vector=embedding,
+                    payload=payload
+                ))
+
+            # Upsert all points
+            result = self.upsert_points(points)
+
+            logger.info(
+                "Document chunks indexed successfully",
+                document_id=document_id,
+                chunks_count=len(chunks),
+                collection_name=self.collection_name
+            )
+
+            return {
+                "status": "success",
+                "document_id": document_id,
+                "chunks_indexed": len(chunks),
+                "collection_name": self.collection_name,
+                "operation_result": result
+            }
+
+        except Exception as e:
+            logger.error(
+                "Failed to index document chunks",
+                document_id=document_id,
+                chunks_count=len(chunks),
+                error=str(e)
+            )
+            raise
+
+    def search_documents(
+        self,
+        query_vector: List[float],
+        limit: int = 8,
+        score_threshold: Optional[float] = None,
+        document_filter: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Search for relevant document chunks using vector similarity.
+
+        Args:
+            query_vector: Query vector for similarity search
+            limit: Maximum number of results to return
+            score_threshold: Minimum similarity score threshold
+            document_filter: Optional filters (document_id, category, tags)
+
+        Returns:
+            List of relevant document chunks with scores and metadata
+        """
+        try:
+            # Build query filter if provided
+            query_filter = None
+            if document_filter:
+                conditions = []
+
+                if "document_id" in document_filter:
+                    conditions.append(FieldCondition(
+                        key="document_id",
+                        match=MatchValue(value=document_filter["document_id"])
+                    ))
+
+                if "category" in document_filter:
+                    conditions.append(FieldCondition(
+                        key="category",
+                        match=MatchValue(value=document_filter["category"])
+                    ))
+
+                if "tags" in document_filter:
+                    # Filter by any of the provided tags
+                    for tag in document_filter["tags"]:
+                        conditions.append(FieldCondition(
+                            key="tags",
+                            match=MatchValue(value=tag)
+                        ))
+
+                if conditions:
+                    query_filter = Filter(must=conditions)
+
+            # Perform search
+            results = self.search_similar(
+                query_vector=query_vector,
+                limit=limit,
+                score_threshold=score_threshold,
+                query_filter=query_filter,
+                with_payload=True,
+                with_vectors=False
+            )
+
+            # Format results for document context
+            formatted_results = []
+            for result in results:
+                if result["payload"]:
+                    formatted_result = {
+                        "chunk_id": result["payload"].get("chunk_id"),
+                        "document_id": result["payload"].get("document_id"),
+                        "text": result["payload"].get("text", ""),
+                        "score": result["score"],
+                        "chunk_index": result["payload"].get("chunk_index", 0),
+                        "title": result["payload"].get("title"),
+                        "category": result["payload"].get("category"),
+                        "metadata": result["payload"].get("metadata", {}),
+                        "indexed_at": result["payload"].get("indexed_at")
+                    }
+                    formatted_results.append(formatted_result)
+
+            logger.info(
+                "Document search completed",
+                query_vector_dim=len(query_vector),
+                results_count=len(formatted_results),
+                limit=limit,
+                score_threshold=score_threshold,
+                filters=document_filter
+            )
+
+            return formatted_results
+
+        except Exception as e:
+            logger.error(
+                "Failed to search documents",
+                query_vector_dim=len(query_vector),
+                limit=limit,
+                error=str(e)
+            )
+            raise
+
+    def delete_document(self, document_id: str) -> Dict[str, Any]:
+        """
+        Delete all chunks for a specific document.
+
+        Args:
+            document_id: Document identifier to delete
+
+        Returns:
+            Deletion operation result
+        """
+        try:
+            # Search for all points with this document_id
+            filter_condition = Filter(
+                must=[FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id)
+                )]
+            )
+
+            # Delete points matching the filter
+            operation_info = self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=filter_condition,
+                wait=True
+            )
+
+            result = {
+                "status": "success",
+                "document_id": document_id,
+                "collection_name": self.collection_name,
+                "operation_info": operation_info
+            }
+
+            logger.info(
+                "Document deleted successfully",
+                document_id=document_id,
+                collection_name=self.collection_name
+            )
+
+            return result
+
+        except Exception as e:
+            logger.error(
+                "Failed to delete document",
+                document_id=document_id,
+                collection_name=self.collection_name,
+                error=str(e)
+            )
+            raise
+
+    def get_document_chunks(self, document_id: str) -> List[Dict[str, Any]]:
+        """
+        Retrieve all chunks for a specific document.
+
+        Args:
+            document_id: Document identifier
+
+        Returns:
+            List of document chunks with metadata
+        """
+        try:
+            # Search for all chunks of this document
+            filter_condition = Filter(
+                must=[FieldCondition(
+                    key="document_id",
+                    match=MatchValue(value=document_id)
+                )]
+            )
+
+            # Use scroll to get all points (not limited by search limit)
+            scroll_result = self.client.scroll(
+                collection_name=self.collection_name,
+                scroll_filter=filter_condition,
+                with_payload=True,
+                with_vectors=False,
+                limit=1000  # Reasonable limit for document chunks
+            )
+
+            # Format results
+            chunks = []
+            for point in scroll_result[0]:  # scroll returns (points, next_page_offset)
+                if point.payload:
+                    chunk = {
+                        "chunk_id": point.payload.get("chunk_id"),
+                        "chunk_index": point.payload.get("chunk_index", 0),
+                        "text": point.payload.get("text", ""),
+                        "title": point.payload.get("title"),
+                        "category": point.payload.get("category"),
+                        "metadata": point.payload.get("metadata", {}),
+                        "indexed_at": point.payload.get("indexed_at")
+                    }
+                    chunks.append(chunk)
+
+            # Sort by chunk index
+            chunks.sort(key=lambda x: x["chunk_index"])
+
+            logger.info(
+                "Document chunks retrieved",
+                document_id=document_id,
+                chunks_count=len(chunks)
+            )
+
+            return chunks
+
+        except Exception as e:
+            logger.error(
+                "Failed to get document chunks",
+                document_id=document_id,
                 error=str(e)
             )
             raise
