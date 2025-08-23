@@ -45,14 +45,28 @@ docker compose -f docker-compose.dev.yml logs -f
 
 ### **4. Verify Installation**
 ```bash
-# Test API health
+# Test API health (comprehensive status)
 curl http://localhost:8000/health
+
+# Expected response:
+# {
+#   "status": "ok",
+#   "service": "SAIA-RAG API",
+#   "version": "0.1.0",
+#   "timestamp": "2025-08-23T17:33:09.882406",
+#   "environment": "development",
+#   "dependencies": {}
+# }
+
+# Test root endpoint
+curl http://localhost:8000/
 
 # Test Qdrant health
 curl http://localhost:6333/readyz
 
-# Access API documentation
+# Access API documentation (development only)
 open http://localhost:8000/docs
+open http://localhost:8000/redoc
 ```
 
 ### **5. Stop Services**
@@ -100,12 +114,36 @@ docker compose -f docker-compose.prod.yml up -d
 # Check all services
 docker compose ps
 
-# Test API
-curl http://localhost:8000/health
+# Test API with comprehensive health info
+curl http://localhost:8000/health | python3 -m json.tool
+
+# Test root endpoint
+curl http://localhost:8000/ | python3 -m json.tool
 
 # Test Qdrant
 curl http://localhost:6333/readyz
 ```
+
+### **Monitoring and Logs**
+```bash
+# View application logs (structured JSON in production)
+docker logs saia-rag-api-dev
+
+# Follow logs in real-time
+docker logs -f saia-rag-api-dev
+
+# View Qdrant logs
+docker logs saia-rag-qdrant-dev
+
+# Check service resource usage
+docker stats
+```
+
+**Log Features**:
+- **Structured Logging**: JSON format with timestamps and context
+- **Request Logging**: All API requests logged with method, path, and status
+- **Error Logging**: Comprehensive error context with stack traces
+- **Health Check Logging**: Service health status changes logged
 
 ---
 

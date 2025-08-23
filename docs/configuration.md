@@ -38,9 +38,14 @@ SAIA-RAG/
 | Variable | Type | Default | Description |
 |----------|------|---------|-------------|
 | `ENVIRONMENT` | `str` | `development` | Environment: development, production, testing |
-| `DEBUG` | `bool` | `True` | Enable debug mode |
+| `DEBUG` | `bool` | `True` | Enable debug mode and verbose logging |
 | `APP_NAME` | `str` | `SAIA-RAG Customer Support AI Assistant` | Application name |
 | `APP_VERSION` | `str` | `0.1.0` | Application version |
+
+**Environment-Specific Behavior**:
+- **Development**: API docs enabled at `/docs` and `/redoc`, verbose logging
+- **Production**: API docs disabled for security, structured JSON logging
+- **Testing**: Optimized for test execution with minimal logging
 
 ### **OpenAI Configuration**
 
@@ -78,6 +83,24 @@ SAIA-RAG/
 |----------|------|---------|-------------|
 | `API_KEY` | `str` | `None` | API key for authentication (optional in development) |
 | `CORS_ORIGINS` | `list[str]` | `["http://localhost:3000", "http://localhost:8080"]` | Allowed CORS origins |
+
+### **Logging Configuration**
+
+The application uses **structured logging** with the following features:
+
+**Logging Format**: JSON-structured logs with timestamps and context
+**Log Levels**: INFO, WARNING, ERROR with appropriate context
+**Log Fields**:
+- `timestamp`: ISO format timestamp
+- `level`: Log level (info, warning, error)
+- `logger`: Logger name
+- `message`: Log message
+- `context`: Additional context fields (user_id, operation, etc.)
+
+**Environment-Specific Logging**:
+- **Development**: Console output with readable formatting
+- **Production**: JSON-structured logs for log aggregation systems
+- **Error Logging**: Full stack traces and request context for debugging
 
 ## 🔒 **Field Validation**
 

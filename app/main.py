@@ -13,6 +13,7 @@ from fastapi import FastAPI, HTTPException, Depends
 import structlog
 
 from .config import get_settings, Settings
+from .vector_store import get_vector_store
 
 # Configure structured logging
 structlog.configure(
@@ -152,19 +153,24 @@ async def health_check(settings: Settings = Depends(get_settings)) -> Dict[str, 
         Health status with service information and dependency checks
     """
     try:
+        # Check vector store health
+        vector_store = get_vector_store()
+        vector_health = await vector_store.health_check()
+
+        # Determine overall status based on dependencies
+        overall_status = "ok" if vector_health["status"] == "healthy" else "degraded"
+
         # Basic service health
         health_data = {
-            "status": "ok",
+            "status": overall_status,
             "service": "SAIA-RAG API",
             "version": settings.app_version,
             "timestamp": datetime.utcnow().isoformat(),
             "environment": settings.environment,
-            "dependencies": {}
+            "dependencies": {
+                "vector_store": vector_health
+            }
         }
-
-        # TODO: Add dependency health checks when implemented
-        # - Qdrant vector database connectivity
-        # - OpenAI API connectivity
 
         logger.info("Health check requested", status="ok")
         return health_data

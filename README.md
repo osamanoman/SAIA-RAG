@@ -63,8 +63,20 @@ curl http://localhost:8000/health
 curl http://localhost:6333/readyz
 ```
 
-### **4. Access Services**
-- **API Documentation**: http://localhost:8000/docs
+### **4. Verify Setup**
+```bash
+# Test comprehensive health check
+curl http://localhost:8000/health
+
+# Test service information
+curl http://localhost:8000/
+
+# Test Qdrant health
+curl http://localhost:6333/readyz
+```
+
+### **5. Access Services**
+- **API Documentation**: http://localhost:8000/docs (development only)
 - **API Health Check**: http://localhost:8000/health
 - **Qdrant Dashboard**: http://localhost:6333/dashboard
 
@@ -72,13 +84,20 @@ curl http://localhost:6333/readyz
 
 ### ✅ **Complete**
 - [x] **Foundation**: Project structure, dependencies, Docker setup
-- [x] **Configuration**: Pydantic v2 settings with validation
-- [x] **Basic API**: FastAPI app with health endpoint
+- [x] **Configuration**: Pydantic v2 settings with validation and environment support
+- [x] **Core Application**: Enhanced FastAPI app with structured logging, error handling, and health monitoring
 
 ### 🚧 **In Progress**
-- [ ] **Core Application**: Middleware, error handling, logging
 - [ ] **Vector Store**: Qdrant integration and operations
 - [ ] **API Endpoints**: Document upload, RAG chat, admin features
+- [ ] **Security**: Authentication, rate limiting, CORS middleware
+
+### **Current Features**
+- **Health Monitoring**: Comprehensive `/health` endpoint with dependency status
+- **Structured Logging**: JSON-formatted logs with request context and error tracking
+- **Environment-Aware**: Different behavior for development vs production
+- **Error Handling**: Robust exception handling with proper logging
+- **Configuration**: Complete Pydantic v2 settings with field validation
 
 ## 🔧 **Configuration**
 
