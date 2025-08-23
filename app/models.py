@@ -1,0 +1,315 @@
+"""
+SAIA-RAG Pydantic v2 Models
+
+All request/response models for the SAIA-RAG API.
+Follows development rules: all models in this file, Pydantic v2 syntax.
+"""
+
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Union
+from enum import Enum
+
+from pydantic import BaseModel, Field, field_validator, ConfigDict
+
+
+# === ENUMS ===
+
+class DocumentStatus(str, Enum):
+    """Document processing status."""
+    UPLOADING = "uploading"
+    PROCESSING = "processing"
+    PROCESSED = "processed"
+    FAILED = "failed"
+
+
+class EscalationReason(str, Enum):
+    """Escalation reason categories."""
+    COMPLEX_TECHNICAL = "complex_technical_issue"
+    UNSATISFIED_RESPONSE = "unsatisfied_response"
+    HUMAN_REQUESTED = "human_requested"
+    SYSTEM_ERROR = "system_error"
+
+
+class FeedbackCategory(str, Enum):
+    """Feedback categories."""
+    ACCURACY = "accuracy"
+    HELPFULNESS = "helpfulness"
+    COMPLETENESS = "completeness"
+    CLARITY = "clarity"
+
+
+# === BASE MODELS ===
+
+class BaseResponse(BaseModel):
+    """Base response model with common fields."""
+    status: str = Field(..., description="Response status")
+    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    
+    model_config = ConfigDict(
+        json_encoders={datetime: lambda v: v.isoformat()},
+        use_enum_values=True
+    )
+
+
+class ErrorDetail(BaseModel):
+    """Error detail model."""
+    code: str = Field(..., description="Error code")
+    message: str = Field(..., description="Error message")
+    field: Optional[str] = Field(None, description="Field that caused the error")
+
+
+class ErrorResponse(BaseResponse):
+    """Error response model."""
+    status: str = Field(default="error", description="Error status")
+    error: ErrorDetail = Field(..., description="Error details")
+
+
+# === DOCUMENT MODELS ===
+
+class DocumentMetadata(BaseModel):
+    """Document metadata model."""
+    title: Optional[str] = Field(None, max_length=200, description="Document title")
+    category: Optional[str] = Field(None, max_length=50, description="Document category")
+    tags: Optional[List[str]] = Field(default=[], description="Document tags")
+    author: Optional[str] = Field(None, max_length=100, description="Document author")
+    source: Optional[str] = Field(None, max_length=200, description="Document source")
+    
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: List[str]) -> List[str]:
+        """Validate tags list."""
+        if v is None:
+            return []
+        # Remove empty tags and limit to 10 tags
+        clean_tags = [tag.strip() for tag in v if tag.strip()]
+        return clean_tags[:10]
+
+
+class DocumentUploadRequest(BaseModel):
+    """Document upload request model."""
+    metadata: DocumentMetadata = Field(default_factory=DocumentMetadata, description="Document metadata")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "metadata": {
+                    "title": "User Manual",
+                    "category": "documentation",
+                    "tags": ["manual", "help", "guide"],
+                    "author": "Support Team",
+                    "source": "internal"
+                }
+            }
+        }
+    )
+
+
+class DocumentChunk(BaseModel):
+    """Document chunk model."""
+    chunk_id: str = Field(..., description="Unique chunk identifier")
+    chunk_index: int = Field(..., ge=0, description="Chunk index within document")
+    text: str = Field(..., min_length=1, description="Chunk text content")
+    title: Optional[str] = Field(None, description="Chunk title")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional chunk metadata")
+
+
+class DocumentResponse(BaseResponse):
+    """Document response model."""
+    status: str = Field(default="success", description="Success status")
+    document_id: str = Field(..., description="Unique document identifier")
+    title: Optional[str] = Field(None, description="Document title")
+    category: Optional[str] = Field(None, description="Document category")
+    chunks_created: int = Field(..., ge=0, description="Number of chunks created")
+    processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
+    upload_date: datetime = Field(default_factory=datetime.utcnow, description="Upload timestamp")
+
+
+class DocumentListItem(BaseModel):
+    """Document list item model."""
+    document_id: str = Field(..., description="Document identifier")
+    title: Optional[str] = Field(None, description="Document title")
+    category: Optional[str] = Field(None, description="Document category")
+    tags: List[str] = Field(default=[], description="Document tags")
+    chunk_count: int = Field(..., ge=0, description="Number of chunks")
+    status: DocumentStatus = Field(..., description="Document status")
+    upload_date: datetime = Field(..., description="Upload date")
+    author: Optional[str] = Field(None, description="Document author")
+
+
+class DocumentListResponse(BaseResponse):
+    """Document list response model."""
+    status: str = Field(default="success", description="Success status")
+    documents: List[DocumentListItem] = Field(..., description="List of documents")
+    total: int = Field(..., ge=0, description="Total number of documents")
+    limit: int = Field(..., ge=1, description="Results limit")
+    offset: int = Field(..., ge=0, description="Results offset")
+
+
+class DocumentDeleteResponse(BaseResponse):
+    """Document deletion response model."""
+    status: str = Field(default="success", description="Success status")
+    document_id: str = Field(..., description="Deleted document ID")
+    chunks_deleted: int = Field(..., ge=0, description="Number of chunks deleted")
+
+
+# === CHAT/RAG MODELS ===
+
+class ChatRequest(BaseModel):
+    """Chat request model."""
+    message: str = Field(..., min_length=1, max_length=2000, description="User message")
+    conversation_id: Optional[str] = Field(None, max_length=100, description="Conversation identifier")
+    max_tokens: Optional[int] = Field(default=500, ge=1, le=2000, description="Maximum response tokens")
+    temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="Response creativity")
+    include_sources: bool = Field(default=True, description="Include source documents in response")
+    
+    @field_validator("message")
+    @classmethod
+    def validate_message(cls, v: str) -> str:
+        """Validate and clean message."""
+        if not v.strip():
+            raise ValueError("Message cannot be empty")
+        return v.strip()
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "message": "How do I reset my password?",
+                "conversation_id": "conv_123",
+                "include_sources": True
+            }
+        }
+    )
+
+
+class SourceDocument(BaseModel):
+    """Source document reference model."""
+    document_id: str = Field(..., description="Source document ID")
+    chunk_id: str = Field(..., description="Source chunk ID")
+    title: Optional[str] = Field(None, description="Document title")
+    relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    text_excerpt: Optional[str] = Field(None, max_length=200, description="Relevant text excerpt")
+
+
+class ChatResponse(BaseResponse):
+    """Chat response model."""
+    status: str = Field(default="success", description="Success status")
+    response: str = Field(..., description="AI assistant response")
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
+    confidence: float = Field(..., ge=0.0, le=1.0, description="Response confidence score")
+    sources: List[SourceDocument] = Field(default=[], description="Source documents used")
+    processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
+    tokens_used: Optional[int] = Field(None, ge=0, description="Tokens used in generation")
+
+
+# === SEARCH MODELS ===
+
+class SearchRequest(BaseModel):
+    """Document search request model."""
+    query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    limit: int = Field(default=10, ge=1, le=50, description="Maximum results")
+    min_score: float = Field(default=0.0, ge=0.0, le=1.0, description="Minimum relevance score")
+    filters: Optional[Dict[str, Any]] = Field(default=None, description="Search filters")
+    
+    @field_validator("query")
+    @classmethod
+    def validate_query(cls, v: str) -> str:
+        """Validate and clean search query."""
+        if not v.strip():
+            raise ValueError("Query cannot be empty")
+        return v.strip()
+
+
+class SearchResult(BaseModel):
+    """Search result model."""
+    chunk_id: str = Field(..., description="Chunk identifier")
+    document_id: str = Field(..., description="Document identifier")
+    title: Optional[str] = Field(None, description="Document title")
+    content: str = Field(..., description="Chunk content")
+    score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+
+
+class SearchResponse(BaseResponse):
+    """Search response model."""
+    status: str = Field(default="success", description="Success status")
+    results: List[SearchResult] = Field(..., description="Search results")
+    total_results: int = Field(..., ge=0, description="Total number of results")
+    processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
+    query: str = Field(..., description="Original search query")
+
+
+# === ESCALATION MODELS ===
+
+class EscalationRequest(BaseModel):
+    """Escalation request model."""
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
+    reason: EscalationReason = Field(..., description="Escalation reason")
+    priority: str = Field(default="medium", description="Escalation priority")
+    user_contact: Optional[str] = Field(None, max_length=200, description="User contact information")
+    description: Optional[str] = Field(None, max_length=1000, description="Additional description")
+    
+    @field_validator("priority")
+    @classmethod
+    def validate_priority(cls, v: str) -> str:
+        """Validate priority level."""
+        allowed = {"low", "medium", "high", "urgent"}
+        if v.lower() not in allowed:
+            raise ValueError(f"Priority must be one of: {allowed}")
+        return v.lower()
+
+
+class EscalationResponse(BaseResponse):
+    """Escalation response model."""
+    status: str = Field(default="escalated", description="Escalation status")
+    escalation_id: str = Field(..., description="Unique escalation identifier")
+    ticket_number: Optional[str] = Field(None, description="Support ticket number")
+    estimated_response_time: Optional[str] = Field(None, description="Estimated response time")
+
+
+# === FEEDBACK MODELS ===
+
+class FeedbackRequest(BaseModel):
+    """Feedback request model."""
+    conversation_id: Optional[str] = Field(None, description="Conversation identifier")
+    message_id: Optional[str] = Field(None, description="Specific message identifier")
+    rating: int = Field(..., ge=1, le=5, description="Rating from 1-5")
+    feedback: Optional[str] = Field(None, max_length=1000, description="Feedback text")
+    category: FeedbackCategory = Field(..., description="Feedback category")
+    
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "conversation_id": "conv_123",
+                "rating": 4,
+                "feedback": "Helpful response, but could be more detailed",
+                "category": "helpfulness"
+            }
+        }
+    )
+
+
+class FeedbackResponse(BaseResponse):
+    """Feedback response model."""
+    status: str = Field(default="received", description="Feedback status")
+    feedback_id: str = Field(..., description="Unique feedback identifier")
+    message: str = Field(default="Thank you for your feedback", description="Confirmation message")
+
+
+# Export all models
+__all__ = [
+    # Enums
+    "DocumentStatus", "EscalationReason", "FeedbackCategory",
+    # Base models
+    "BaseResponse", "ErrorDetail", "ErrorResponse",
+    # Document models
+    "DocumentMetadata", "DocumentUploadRequest", "DocumentChunk", 
+    "DocumentResponse", "DocumentListItem", "DocumentListResponse", "DocumentDeleteResponse",
+    # Chat/RAG models
+    "ChatRequest", "SourceDocument", "ChatResponse",
+    # Search models
+    "SearchRequest", "SearchResult", "SearchResponse",
+    # Escalation models
+    "EscalationRequest", "EscalationResponse",
+    # Feedback models
+    "FeedbackRequest", "FeedbackResponse"
+]
