@@ -149,30 +149,10 @@ class WhatsAppClient:
             Message sending result
         """
         try:
-            # Format the main response
+            # Format the main response (clean, no extra messages)
             message = rag_response["response"]
-            
-            # Add confidence indicator if low confidence
-            confidence = rag_response.get("confidence", 0.0)
-            if confidence < 0.5:
-                message += f"\n\n_Note: I'm {confidence:.0%} confident about this answer. You may want to verify this information._"
-            
-            # Add source citations if requested and available
-            if include_sources and rag_response.get("sources"):
-                sources = rag_response["sources"][:3]  # Limit to 3 sources for WhatsApp
-                if sources:
-                    message += "\n\n📚 *Sources:*"
-                    for i, source in enumerate(sources, 1):
-                        title = source.get("title", "Document")
-                        score = source.get("relevance_score", 0.0)
-                        message += f"\n{i}. {title} (relevance: {score:.0%})"
-            
-            # Add processing info
-            processing_time = rag_response.get("processing_time_ms", 0)
-            if processing_time > 1000:
-                message += f"\n\n_Response generated in {processing_time/1000:.1f}s_"
-            
-            # Send the formatted message
+
+            # Send the clean message without confidence warnings or processing time
             return await self.send_text_message(to, message)
             
         except Exception as e:

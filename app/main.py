@@ -10,8 +10,8 @@ from typing import Dict, Any, Optional, List
 import time
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
+from fastapi.responses import HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 import structlog
 
@@ -1535,7 +1535,8 @@ async def whatsapp_webhook_verify(
 
         if challenge:
             logger.info("WhatsApp webhook verification successful")
-            return challenge
+            # Return plain text response (not JSON) as required by Meta
+            return PlainTextResponse(content=challenge)
         else:
             logger.warning("WhatsApp webhook verification failed")
             raise HTTPException(
@@ -1555,48 +1556,83 @@ async def whatsapp_webhook_verify(
 
 @app.post("/whatsapp/webhook")
 async def whatsapp_webhook_receive(
-    request_data: Dict[str, Any],
+    request: Request,
     settings: Settings = Depends(get_settings)
 ):
     """
     WhatsApp webhook message receiver endpoint.
 
-    This endpoint receives incoming WhatsApp messages and processes them
-    through the RAG system to generate AI-powered responses.
+    Following Meta's best practices:
+    - Responds with 200 OK within 80ms
+    - Processes business logic asynchronously
+    - Uses background tasks for RAG processing
 
     Args:
-        request_data: Webhook payload from WhatsApp
+        request: FastAPI request object
         settings: Application settings
 
     Returns:
-        Success confirmation
-
-    Raises:
-        HTTPException: If message processing fails
+        Immediate 200 OK response
     """
     try:
+        # Step 1: Respond immediately (within 80ms as per Meta requirements)
         if not settings.is_whatsapp_configured():
-            raise HTTPException(
-                status_code=503,
-                detail="WhatsApp integration not configured"
-            )
+            logger.warning("WhatsApp webhook received but not configured")
+            return {"status": "not_configured"}
 
+        # Parse request body quickly
+        request_data = await request.json()
+
+        logger.info("WhatsApp webhook received",
+                   entry_count=len(request_data.get("entry", [])))
+
+        # Step 2: Quick validation and immediate response
         whatsapp_client = get_whatsapp_client()
-
-        # Parse the incoming message
         message_data = whatsapp_client.parse_webhook_message(request_data)
 
         if not message_data:
-            # Not a text message or parsing failed
+            # Not a text message, status update, or parsing failed
             return {"status": "ignored"}
 
+        # Step 3: Schedule async processing (don't wait for it)
+        asyncio.create_task(
+            process_whatsapp_message_async(
+                message_data=message_data,
+                settings=settings
+            )
+        )
+
+        # Step 4: Return immediate success (as required by Meta)
+        return {"status": "received"}
+
+    except Exception as e:
+        # Log error but still return 200 to prevent webhook retries
+        logger.error("WhatsApp webhook processing error", error=str(e))
+        return {"status": "error", "message": "Webhook processed with errors"}
+
+
+async def process_whatsapp_message_async(
+    message_data: Dict[str, Any],
+    settings: Settings
+):
+    """
+    Asynchronous WhatsApp message processing function.
+
+    This function handles the actual RAG processing and response sending
+    in the background, allowing the webhook to respond quickly to Meta.
+
+    Args:
+        message_data: Parsed message data from WhatsApp
+        settings: Application settings
+    """
+    try:
         # Extract message details
         user_phone = message_data["from"]
         user_message = message_data["text"]
         message_id = message_data["message_id"]
 
         logger.info(
-            "WhatsApp message received",
+            "Processing WhatsApp message asynchronously",
             from_number=user_phone,
             message_id=message_id,
             message_length=len(user_message)
@@ -1608,43 +1644,31 @@ async def whatsapp_webhook_receive(
             query=user_message,
             conversation_id=f"whatsapp_{user_phone}",
             max_context_chunks=5,  # Limit for faster WhatsApp responses
-            confidence_threshold=settings.confidence_threshold
+            confidence_threshold=0.25  # Lower threshold for WhatsApp to get more matches
         )
 
         # Send RAG response back via WhatsApp
+        whatsapp_client = get_whatsapp_client()
         send_result = await whatsapp_client.send_rag_response(
             to=user_phone,
             rag_response=rag_response,
-            include_sources=True
+            include_sources=False  # Keep WhatsApp messages clean and concise
         )
 
         logger.info(
-            "WhatsApp RAG response sent",
+            "WhatsApp RAG response sent successfully",
             to=user_phone,
             message_id=send_result.get("message_id"),
             confidence=rag_response.get("confidence"),
             processing_time_ms=rag_response.get("processing_time_ms")
         )
 
-        return {
-            "status": "processed",
-            "message_id": message_id,
-            "response_sent": send_result.get("success", False),
-            "confidence": rag_response.get("confidence"),
-            "processing_time_ms": rag_response.get("processing_time_ms")
-        }
-
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(
-            "WhatsApp message processing failed",
+            "Async WhatsApp message processing failed",
             error=str(e),
-            request_data=request_data
-        )
-        raise HTTPException(
-            status_code=500,
-            detail="Message processing failed"
+            from_number=message_data.get("from"),
+            message_id=message_data.get("message_id")
         )
 
 
