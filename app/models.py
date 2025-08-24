@@ -168,7 +168,26 @@ class ChatRequest(BaseModel):
         """Validate and clean message."""
         if not v.strip():
             raise ValueError("Message cannot be empty")
-        return v.strip()
+
+        # Basic sanitization - remove excessive whitespace
+        import re
+        cleaned = re.sub(r'\s+', ' ', v.strip())
+
+        return cleaned
+
+    @field_validator("conversation_id")
+    @classmethod
+    def validate_conversation_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate conversation ID format."""
+        if v is None:
+            return None
+
+        # Basic alphanumeric validation
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError("Conversation ID must contain only alphanumeric characters, underscores, and hyphens")
+
+        return v
     
     model_config = ConfigDict(
         json_schema_extra={
@@ -188,6 +207,24 @@ class SourceDocument(BaseModel):
     title: Optional[str] = Field(None, description="Document title")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
     text_excerpt: Optional[str] = Field(None, max_length=200, description="Relevant text excerpt")
+
+    @field_validator("relevance_score")
+    @classmethod
+    def validate_relevance_score(cls, v: float) -> float:
+        """Ensure relevance score is a valid float between 0 and 1."""
+        if not isinstance(v, (int, float)):
+            raise ValueError("Relevance score must be a number")
+        return float(max(0.0, min(1.0, v)))
+
+    @field_validator("text_excerpt")
+    @classmethod
+    def validate_text_excerpt(cls, v: Optional[str]) -> Optional[str]:
+        """Validate and truncate text excerpt."""
+        if v is None:
+            return None
+        if len(v) > 200:
+            return v[:197] + "..."
+        return v
 
 
 class ChatResponse(BaseResponse):
@@ -295,6 +332,89 @@ class FeedbackResponse(BaseResponse):
     message: str = Field(default="Thank you for your feedback", description="Confirmation message")
 
 
+# === ADMIN MODELS ===
+
+class SystemStats(BaseModel):
+    """System statistics model."""
+    total_documents: int = Field(..., ge=0, description="Total number of documents")
+    total_chunks: int = Field(..., ge=0, description="Total number of document chunks")
+    total_conversations: int = Field(..., ge=0, description="Total number of conversations")
+    total_escalations: int = Field(..., ge=0, description="Total number of escalations")
+    total_feedback: int = Field(..., ge=0, description="Total feedback submissions")
+    avg_response_time_ms: float = Field(..., ge=0, description="Average response time in milliseconds")
+    uptime_seconds: int = Field(..., ge=0, description="System uptime in seconds")
+
+
+class VectorStoreStats(BaseModel):
+    """Vector store statistics model."""
+    collection_name: str = Field(..., description="Collection name")
+    total_points: int = Field(..., ge=0, description="Total points in collection")
+    vector_size: int = Field(..., ge=0, description="Vector dimension size")
+    distance_metric: str = Field(..., description="Distance metric used")
+    index_status: str = Field(..., description="Index status")
+    memory_usage_mb: Optional[float] = Field(None, ge=0, description="Memory usage in MB")
+
+
+class AdminStatsResponse(BaseResponse):
+    """Admin statistics response model."""
+    status: str = Field(default="success", description="Success status")
+    system: SystemStats = Field(..., description="System statistics")
+    vector_store: VectorStoreStats = Field(..., description="Vector store statistics")
+    collection_time: datetime = Field(default_factory=datetime.utcnow, description="Statistics collection time")
+
+
+class SystemHealthDetail(BaseModel):
+    """Detailed system health model."""
+    component: str = Field(..., description="Component name")
+    status: str = Field(..., description="Component status")
+    response_time_ms: Optional[int] = Field(None, ge=0, description="Response time in milliseconds")
+    details: Dict[str, Any] = Field(default_factory=dict, description="Additional component details")
+    last_check: datetime = Field(default_factory=datetime.utcnow, description="Last health check time")
+
+
+class AdminHealthResponse(BaseResponse):
+    """Admin health response model."""
+    status: str = Field(default="success", description="Overall system status")
+    components: List[SystemHealthDetail] = Field(..., description="Component health details")
+    overall_health: str = Field(..., description="Overall health status")
+    checks_performed: int = Field(..., ge=0, description="Number of health checks performed")
+
+
+class SystemConfigItem(BaseModel):
+    """System configuration item model."""
+    key: str = Field(..., description="Configuration key")
+    value: str = Field(..., description="Configuration value (sanitized)")
+    category: str = Field(..., description="Configuration category")
+    is_sensitive: bool = Field(default=False, description="Whether the value is sensitive")
+    description: Optional[str] = Field(None, description="Configuration description")
+
+
+class AdminConfigResponse(BaseResponse):
+    """Admin configuration response model."""
+    status: str = Field(default="success", description="Success status")
+    configuration: List[SystemConfigItem] = Field(..., description="System configuration items")
+    environment: str = Field(..., description="Current environment")
+    config_loaded_at: datetime = Field(default_factory=datetime.utcnow, description="Configuration load time")
+
+
+class LogEntry(BaseModel):
+    """Log entry model."""
+    timestamp: datetime = Field(..., description="Log entry timestamp")
+    level: str = Field(..., description="Log level")
+    message: str = Field(..., description="Log message")
+    component: Optional[str] = Field(None, description="Component that generated the log")
+    context: Dict[str, Any] = Field(default_factory=dict, description="Additional log context")
+
+
+class AdminLogsResponse(BaseResponse):
+    """Admin logs response model."""
+    status: str = Field(default="success", description="Success status")
+    logs: List[LogEntry] = Field(..., description="Recent log entries")
+    total_logs: int = Field(..., ge=0, description="Total number of logs")
+    log_level_filter: Optional[str] = Field(None, description="Applied log level filter")
+    time_range: str = Field(..., description="Time range for logs")
+
+
 # Export all models
 __all__ = [
     # Enums
@@ -302,7 +422,7 @@ __all__ = [
     # Base models
     "BaseResponse", "ErrorDetail", "ErrorResponse",
     # Document models
-    "DocumentMetadata", "DocumentUploadRequest", "DocumentChunk", 
+    "DocumentMetadata", "DocumentUploadRequest", "DocumentChunk",
     "DocumentResponse", "DocumentListItem", "DocumentListResponse", "DocumentDeleteResponse",
     # Chat/RAG models
     "ChatRequest", "SourceDocument", "ChatResponse",
@@ -311,5 +431,10 @@ __all__ = [
     # Escalation models
     "EscalationRequest", "EscalationResponse",
     # Feedback models
-    "FeedbackRequest", "FeedbackResponse"
+    "FeedbackRequest", "FeedbackResponse",
+    # Admin models
+    "SystemStats", "VectorStoreStats", "AdminStatsResponse",
+    "SystemHealthDetail", "AdminHealthResponse",
+    "SystemConfigItem", "AdminConfigResponse",
+    "LogEntry", "AdminLogsResponse"
 ]

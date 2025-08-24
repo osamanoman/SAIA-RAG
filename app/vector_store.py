@@ -520,13 +520,24 @@ class QdrantVectorStore:
             return formatted_results
 
         except Exception as e:
+            error_type = type(e).__name__
             logger.error(
                 "Failed to search documents",
                 query_vector_dim=len(query_vector),
                 limit=limit,
-                error=str(e)
+                error=str(e),
+                error_type=error_type
             )
-            raise
+
+            # Provide specific error messages for common Qdrant issues
+            if "connection" in str(e).lower():
+                raise Exception("Cannot connect to vector database. Please check Qdrant service.")
+            elif "collection" in str(e).lower():
+                raise Exception("Vector collection not found. Please upload documents first.")
+            elif "dimension" in str(e).lower():
+                raise Exception("Vector dimension mismatch. Please check embedding configuration.")
+            else:
+                raise Exception(f"Vector search error: {str(e)}")
 
     def delete_document(self, document_id: str) -> Dict[str, Any]:
         """

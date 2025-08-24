@@ -7,37 +7,44 @@ Follows clean architecture patterns with proper dependency injection.
 
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
+import time
+import asyncio
 
 from fastapi import FastAPI, HTTPException, Depends
+from pydantic import BaseModel, Field
 import structlog
 
 from .config import get_settings, Settings
 from .vector_store import get_vector_store
+from .rag_service import get_rag_service
+from .openai_client import get_openai_client
 from .models import (
-    DocumentUploadRequest, DocumentResponse, DocumentListResponse,
-    DocumentDeleteResponse, ErrorResponse, ChatRequest, ChatResponse,
-    SearchRequest, SearchResponse, EscalationRequest, EscalationResponse,
-    FeedbackRequest, FeedbackResponse
+DocumentUploadRequest, DocumentResponse, DocumentListResponse,
+DocumentDeleteResponse, ErrorResponse, ChatRequest, ChatResponse,
+SearchRequest, SearchResponse, EscalationRequest, EscalationResponse,
+FeedbackRequest, FeedbackResponse, AdminStatsResponse, AdminHealthResponse,
+AdminConfigResponse, AdminLogsResponse, SystemStats, VectorStoreStats,
+SystemHealthDetail, SystemConfigItem, LogEntry
 )
 
 # Configure structured logging
 structlog.configure(
-    processors=[
-        structlog.stdlib.filter_by_level,
-        structlog.stdlib.add_logger_name,
-        structlog.stdlib.add_log_level,
-        structlog.stdlib.PositionalArgumentsFormatter(),
-        structlog.processors.TimeStamper(fmt="iso"),
-        structlog.processors.StackInfoRenderer(),
-        structlog.processors.format_exc_info,
-        structlog.processors.UnicodeDecoder(),
-        structlog.processors.JSONRenderer()
-    ],
-    context_class=dict,
-    logger_factory=structlog.stdlib.LoggerFactory(),
-    wrapper_class=structlog.stdlib.BoundLogger,
-    cache_logger_on_first_use=True,
+processors=[
+    structlog.stdlib.filter_by_level,
+    structlog.stdlib.add_logger_name,
+    structlog.stdlib.add_log_level,
+    structlog.stdlib.PositionalArgumentsFormatter(),
+    structlog.processors.TimeStamper(fmt="iso"),
+    structlog.processors.StackInfoRenderer(),
+    structlog.processors.format_exc_info,
+    structlog.processors.UnicodeDecoder(),
+    structlog.processors.JSONRenderer()
+],
+context_class=dict,
+logger_factory=structlog.stdlib.LoggerFactory(),
+wrapper_class=structlog.stdlib.BoundLogger,
+cache_logger_on_first_use=True,
 )
 
 # Get logger
@@ -51,37 +58,68 @@ def create_application() -> FastAPI:
     Returns:
         Configured FastAPI application instance
     """
-    settings = get_settings()
+settings = get_settings()
 
-    # Configure app based on environment
-    app_config = {
-        "title": settings.app_name,
-        "description": "RAG-based customer support chatbot with smart fallbacks",
-        "version": settings.app_version,
-    }
+# Configure app based on environment
+app_config = {
+    "title": settings.app_name,
+    "description": "RAG-based customer support chatbot with smart fallbacks",
+    "version": settings.app_version,
+}
 
-    # Disable docs in production
-    if settings.is_production():
-        app_config.update({
-            "docs_url": None,
-            "redoc_url": None,
-            "openapi_url": None
-        })
+# Disable docs in production
+if settings.is_production():
+    app_config.update({
+        "docs_url": None,
+        "redoc_url": None,
+        "openapi_url": None
+    })
 
-    app = FastAPI(**app_config)
+app = FastAPI(**app_config)
 
-    logger.info(
-        "FastAPI application created",
-        environment=settings.environment,
-        debug=settings.debug,
-        version=settings.app_version
-    )
+logger.info(
+    "FastAPI application created",
+    environment=settings.environment,
+    debug=settings.debug,
+    version=settings.app_version
+)
 
-    return app
+return app
 
 
 # Create application instance
 app = create_application()
+
+
+# === MIDDLEWARE ===
+
+@app.middleware("http")
+async def performance_monitoring_middleware(request, call_next):
+    """Monitor request performance and log metrics."""
+    start_time = time.time()
+
+    # Process request
+    response = await call_next(request)
+
+    # Calculate processing time
+    process_time = time.time() - start_time
+    process_time_ms = int(process_time * 1000)
+
+    # Add performance headers
+    response.headers["X-Process-Time"] = str(process_time_ms)
+    response.headers["X-Timestamp"] = str(int(start_time))
+
+    # Log performance metrics for slow requests
+    if process_time_ms > 1000:  # Log requests taking more than 1 second
+        logger.warning(
+            "Slow request detected",
+            method=request.method,
+            url=str(request.url),
+            status_code=response.status_code,
+            process_time_ms=process_time_ms
+        )
+
+    return response
 
 
 # === APPLICATION EVENTS ===
@@ -159,134 +197,269 @@ async def health_check(settings: Settings = Depends(get_settings)) -> Dict[str, 
         Health status with service information and dependency checks
     """
     try:
-        # Check vector store health
-        vector_store = get_vector_store()
-        vector_health = await vector_store.health_check()
+    # Check vector store health
+    vector_store = get_vector_store()
+    vector_health = await vector_store.health_check()
 
-        # Determine overall status based on dependencies
-        overall_status = "ok" if vector_health["status"] == "healthy" else "degraded"
+    # Check OpenAI health
+    openai_client = get_openai_client()
+    openai_health = await openai_client.health_check()
 
-        # Basic service health
-        health_data = {
-            "status": overall_status,
-            "service": "SAIA-RAG API",
-            "version": settings.app_version,
-            "timestamp": datetime.utcnow().isoformat(),
-            "environment": settings.environment,
-            "dependencies": {
-                "vector_store": vector_health
-            }
+    # Determine overall status based on dependencies
+    all_healthy = (
+        vector_health["status"] == "healthy" and
+        openai_health["status"] == "healthy"
+    )
+    overall_status = "ok" if all_healthy else "degraded"
+
+    # Basic service health
+    health_data = {
+        "status": overall_status,
+        "service": "SAIA-RAG API",
+        "version": settings.app_version,
+        "timestamp": datetime.utcnow().isoformat(),
+        "environment": settings.environment,
+        "dependencies": {
+            "vector_store": vector_health,
+            "openai": openai_health
         }
+    }
 
-        logger.info("Health check requested", status="ok")
-        return health_data
+    logger.info("Health check requested", status="ok")
+    return health_data
 
-    except Exception as e:
-        logger.error("Health check failed", error=str(e))
-        raise HTTPException(
-            status_code=503,
-            detail="Service health check failed"
-        )
+except Exception as e:
+    logger.error("Health check failed", error=str(e))
+    raise HTTPException(
+        status_code=503,
+        detail="Service health check failed"
+    )
 
 
 @app.get("/")
 async def root(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
-    """
-    Root endpoint with service information.
+"""
+Root endpoint with service information.
 
-    Returns:
-        Basic service information and available endpoints
-    """
-    try:
-        response_data = {
-            "message": settings.app_name,
-            "status": "running",
-            "version": settings.app_version,
-            "environment": settings.environment,
-        }
+Returns:
+    Basic service information and available endpoints
+"""
+try:
+    response_data = {
+        "message": settings.app_name,
+        "status": "running",
+        "version": settings.app_version,
+        "environment": settings.environment,
+    }
 
-        # Add docs URL only in development
-        if settings.is_development():
-            response_data["docs"] = "/docs"
-            response_data["redoc"] = "/redoc"
+    # Add docs URL only in development
+    if settings.is_development():
+        response_data["docs"] = "/docs"
+        response_data["redoc"] = "/redoc"
 
-        logger.info("Root endpoint accessed")
-        return response_data
+    logger.info("Root endpoint accessed")
+    return response_data
 
-    except Exception as e:
-        logger.error("Root endpoint failed", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Internal server error"
-        )
+except Exception as e:
+    logger.error("Root endpoint failed", error=str(e))
+    raise HTTPException(
+        status_code=500,
+        detail="Internal server error"
+    )
 
 
 # === DOCUMENT MANAGEMENT ENDPOINTS ===
 
 @app.post("/documents/upload", response_model=DocumentResponse)
 async def upload_document(
-    request: DocumentUploadRequest,
-    settings: Settings = Depends(get_settings)
+request: DocumentUploadRequest,
+content: Optional[str] = None,
+settings: Settings = Depends(get_settings)
 ) -> DocumentResponse:
+"""
+Upload and process a document for the RAG knowledge base.
+
+This endpoint processes document content through the complete RAG pipeline:
+- Text extraction and cleaning
+- Intelligent chunking with overlap
+- OpenAI embedding generation
+- Vector store indexing
+
+Args:
+    request: Document upload request with metadata
+    content: Document content (optional - uses sample content if not provided)
+    settings: Application settings
+
+Returns:
+    Document processing result with chunk information
+
+Raises:
+    HTTPException: If document processing fails
+"""
+try:
+    start_time = datetime.utcnow()
+
+    # Use provided content or default sample content
+    document_content = content or """
+    Password Reset Instructions:
+
+    1. Go to the login page and click "Forgot Password"
+    2. Enter your email address
+    3. Check your email for a reset link
+    4. Click the link and create a new password
+    5. Your password must be at least 8 characters long
+    6. Include uppercase, lowercase, numbers, and special characters
+
+    If you continue to have issues:
+    - Clear your browser cache and cookies
+    - Try using a different browser
+    - Contact support if the problem persists
+
+    Account Management:
+    - You can update your profile information in Account Settings
+    - Enable two-factor authentication for better security
+    - Review your login history regularly
+
+    Troubleshooting Common Issues:
+    - "Invalid credentials" error: Check caps lock and typing
+    - "Account locked" message: Wait 15 minutes or contact support
+    - Email not received: Check spam folder and verify email address
     """
-    Upload and process a document for the RAG knowledge base.
 
-    This endpoint accepts document metadata and returns processing information.
-    The actual file upload and processing would be implemented with multipart/form-data.
+    # Get RAG service
+    rag_service = get_rag_service()
 
-    Args:
-        request: Document upload request with metadata
-        settings: Application settings
+    # Process document through RAG pipeline
+    ingestion_result = await rag_service.ingest_document(
+        content=document_content,
+        metadata=request.metadata.dict(),
+        content_type="text/plain"
+    )
 
-    Returns:
-        Document processing result with chunk information
-
-    Raises:
-        HTTPException: If document processing fails
-    """
-    try:
-        start_time = datetime.utcnow()
-
-        # Generate unique document ID
-        import uuid
-        document_id = str(uuid.uuid4())
-
-        # TODO: Implement actual file processing
-        # - Extract text from uploaded file
-        # - Split into chunks
-        # - Generate embeddings via OpenAI
-        # - Index in vector store
-
-        # For now, simulate processing
-        chunks_created = 5  # Simulated chunk count
-
-        end_time = datetime.utcnow()
-        processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
-
-        logger.info(
-            "Document upload processed",
-            document_id=document_id,
-            title=request.metadata.title,
-            category=request.metadata.category,
-            chunks_created=chunks_created,
-            processing_time_ms=processing_time_ms
-        )
-
-        return DocumentResponse(
-            document_id=document_id,
-            title=request.metadata.title,
-            category=request.metadata.category,
-            chunks_created=chunks_created,
-            processing_time_ms=processing_time_ms,
-            upload_date=start_time
-        )
-
-    except Exception as e:
-        logger.error("Document upload failed", error=str(e))
+    if not ingestion_result["success"]:
         raise HTTPException(
-            status_code=500,
-            detail="Document upload processing failed"
+            status_code=400,
+            detail=f"Document processing failed: {ingestion_result['error']}"
         )
+
+    end_time = datetime.utcnow()
+    total_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    logger.info(
+        "Document upload completed",
+        document_id=ingestion_result["document_id"],
+        title=request.metadata.title,
+        category=request.metadata.category,
+        chunks_created=ingestion_result["chunks_created"],
+        total_time_ms=total_time_ms
+    )
+
+    return DocumentResponse(
+        document_id=ingestion_result["document_id"],
+        title=request.metadata.title,
+        category=request.metadata.category,
+        chunks_created=ingestion_result["chunks_created"],
+        processing_time_ms=total_time_ms,
+        upload_date=start_time
+    )
+
+except HTTPException:
+    raise
+except Exception as e:
+    logger.error("Document upload failed", error=str(e))
+    raise HTTPException(
+        status_code=500,
+        detail="Document upload processing failed"
+    )
+
+
+class DocumentContentRequest(BaseModel):
+"""Document content upload request."""
+title: str = Field(..., min_length=1, max_length=200, description="Document title")
+content: str = Field(..., min_length=10, description="Document content")
+category: str = Field(default="general", max_length=50, description="Document category")
+tags: List[str] = Field(default=[], description="Document tags")
+author: Optional[str] = Field(None, max_length=100, description="Document author")
+
+
+@app.post("/documents/upload-content", response_model=DocumentResponse)
+async def upload_document_with_content(
+request: DocumentContentRequest,
+settings: Settings = Depends(get_settings)
+) -> DocumentResponse:
+"""
+Upload a document with custom content.
+
+This endpoint allows you to upload documents with your own content
+instead of using the default sample content.
+
+Args:
+    request: Document content upload request
+    settings: Application settings
+
+Returns:
+    Document processing result with chunk information
+
+Raises:
+    HTTPException: If document processing fails
+"""
+try:
+    start_time = datetime.utcnow()
+
+    # Create metadata
+    metadata = {
+        "title": request.title,
+        "category": request.category,
+        "tags": request.tags,
+        "author": request.author
+    }
+
+    # Get RAG service
+    rag_service = get_rag_service()
+
+    # Process document through RAG pipeline
+    ingestion_result = await rag_service.ingest_document(
+        content=request.content,
+        metadata=metadata,
+        content_type="text/plain"
+    )
+
+    if not ingestion_result["success"]:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document processing failed: {ingestion_result['error']}"
+        )
+
+    end_time = datetime.utcnow()
+    total_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+    logger.info(
+        "Document with content uploaded",
+        document_id=ingestion_result["document_id"],
+        title=request.title,
+        category=request.category,
+        content_length=len(request.content),
+        chunks_created=ingestion_result["chunks_created"],
+        total_time_ms=total_time_ms
+    )
+
+    return DocumentResponse(
+        document_id=ingestion_result["document_id"],
+        title=request.title,
+        category=request.category,
+        chunks_created=ingestion_result["chunks_created"],
+        processing_time_ms=total_time_ms,
+        upload_date=start_time
+    )
+
+except HTTPException:
+    raise
+except Exception as e:
+    logger.error("Document content upload failed", error=str(e))
+    raise HTTPException(
+        status_code=500,
+        detail="Document upload processing failed"
+    )
 
 
 @app.get("/documents", response_model=DocumentListResponse)
@@ -431,11 +604,12 @@ async def chat(
     """
     Process a chat message using RAG (Retrieval-Augmented Generation).
 
-    This endpoint:
-    1. Converts the user message to embeddings
-    2. Searches for relevant document chunks
-    3. Generates a response using OpenAI with context
-    4. Returns the response with source citations
+    This endpoint implements the complete RAG pipeline:
+    1. Converts the user message to embeddings via OpenAI
+    2. Searches vector store for relevant document chunks
+    3. Builds context from retrieved chunks
+    4. Generates response using OpenAI Chat API with context
+    5. Returns response with source citations
 
     Args:
         request: Chat request with message and options
@@ -449,51 +623,80 @@ async def chat(
     """
     try:
         start_time = datetime.utcnow()
+        logger.info("Chat request started", message_preview=request.message[:50])
 
-        # TODO: Implement actual RAG pipeline
-        # 1. Generate embeddings for user message via OpenAI
-        # 2. Search vector store for relevant chunks
-        # 3. Build context from retrieved chunks
-        # 4. Generate response via OpenAI Chat API
-        # 5. Extract and format source citations
+        # Get RAG service
+        rag_service = get_rag_service()
+        logger.info("RAG service obtained")
 
-        # For now, simulate RAG response
-        response_text = f"I understand you're asking about: '{request.message}'. This is a simulated response from the RAG system."
-        confidence = 0.85
-        sources = []  # Would contain actual source documents
+        # Generate RAG response
+        logger.info("Starting RAG response generation")
+        rag_result = await rag_service.generate_response(
+            query=request.message,
+            conversation_id=request.conversation_id,
+            max_context_chunks=8,
+            confidence_threshold=settings.confidence_threshold
+        )
+        logger.info("RAG response generated", result_keys=list(rag_result.keys()))
 
         end_time = datetime.utcnow()
-        processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        total_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
         logger.info(
-            "Chat request processed",
+            "Chat request processed via RAG",
             message_length=len(request.message),
             conversation_id=request.conversation_id,
-            confidence=confidence,
-            sources_count=len(sources),
-            processing_time_ms=processing_time_ms
+            confidence=rag_result["confidence"],
+            sources_count=rag_result["sources_count"],
+            processing_time_ms=total_time_ms,
+            tokens_used=rag_result["tokens_used"]
         )
 
-        return ChatResponse(
-            response=response_text,
+        # Debug the sources before creating response
+        logger.info("Sources debug",
+                   sources_type=type(rag_result["sources"]),
+                   sources_length=len(rag_result["sources"]) if rag_result["sources"] else 0)
+
+        if rag_result["sources"]:
+            logger.info("First source debug",
+                       first_source_type=type(rag_result["sources"][0]),
+                       first_source_keys=list(rag_result["sources"][0].__dict__.keys()) if hasattr(rag_result["sources"][0], '__dict__') else "no __dict__")
+
+        logger.info("Creating ChatResponse object")
+        chat_response = ChatResponse(
+            response=rag_result["response"],
             conversation_id=request.conversation_id,
-            confidence=confidence,
-            sources=sources,
-            processing_time_ms=processing_time_ms,
-            tokens_used=150  # Simulated token count
+            confidence=rag_result["confidence"],
+            sources=rag_result["sources"],
+            processing_time_ms=total_time_ms,
+            tokens_used=rag_result["tokens_used"]
         )
+        logger.info("ChatResponse created successfully")
+
+        return chat_response
 
     except Exception as e:
         logger.error(
             "Chat request failed",
             message=request.message[:100],
             conversation_id=request.conversation_id,
-            error=str(e)
+            error=str(e),
+            error_type=type(e).__name__,
+            traceback=str(e.__traceback__)
         )
-        raise HTTPException(
-            status_code=500,
-            detail="Chat request processing failed"
-        )
+
+        # Return a proper error response instead of raising HTTPException
+        return {
+            "status": "error",
+            "timestamp": datetime.utcnow(),
+            "response": "I apologize, but I'm experiencing technical difficulties. Please try again later.",
+            "conversation_id": request.conversation_id,
+            "confidence": 0.0,
+            "sources": [],
+            "processing_time_ms": 0,
+            "tokens_used": 0,
+            "error": str(e)
+        }
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -504,10 +707,11 @@ async def search_documents(
     """
     Search documents using vector similarity.
 
-    This endpoint:
-    1. Converts the search query to embeddings
+    This endpoint implements semantic search:
+    1. Converts the search query to embeddings via OpenAI
     2. Performs vector similarity search in Qdrant
-    3. Returns ranked results with relevance scores
+    3. Applies filters if provided
+    4. Returns ranked results with relevance scores
 
     Args:
         request: Search request with query and filters
@@ -522,35 +726,33 @@ async def search_documents(
     try:
         start_time = datetime.utcnow()
 
-        # Get vector store instance
-        vector_store = get_vector_store()
+        # Get RAG service
+        rag_service = get_rag_service()
 
-        # TODO: Implement actual search pipeline
-        # 1. Generate embeddings for search query via OpenAI
-        # 2. Perform vector search in Qdrant
-        # 3. Apply filters if provided
-        # 4. Format and return results
-
-        # For now, simulate search results
-        results = []
-        total_results = 0
-
-        end_time = datetime.utcnow()
-        processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
-
-        logger.info(
-            "Search request processed",
+        # Perform semantic search
+        search_result = await rag_service.search_documents(
             query=request.query,
             limit=request.limit,
             min_score=request.min_score,
-            results_count=len(results),
-            processing_time_ms=processing_time_ms
+            filters=request.filters
+        )
+
+        end_time = datetime.utcnow()
+        total_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+        logger.info(
+            "Search request processed via RAG",
+            query=request.query,
+            limit=request.limit,
+            min_score=request.min_score,
+            results_count=search_result["total_results"],
+            processing_time_ms=total_time_ms
         )
 
         return SearchResponse(
-            results=results,
-            total_results=total_results,
-            processing_time_ms=processing_time_ms,
+            results=search_result["results"],
+            total_results=search_result["total_results"],
+            processing_time_ms=total_time_ms,
             query=request.query
         )
 
@@ -708,4 +910,502 @@ async def feedback(
         raise HTTPException(
             status_code=500,
             detail="Feedback processing failed"
+        )
+
+
+# === ADMIN ENDPOINTS ===
+
+@app.get("/admin/stats", response_model=AdminStatsResponse)
+async def get_admin_stats(
+    settings: Settings = Depends(get_settings)
+) -> AdminStatsResponse:
+    """
+    Get comprehensive system statistics for administrators.
+
+    This endpoint provides detailed statistics about:
+    - Document and chunk counts
+    - Conversation and escalation metrics
+    - System performance metrics
+    - Vector store statistics
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        Comprehensive system statistics
+
+    Raises:
+        HTTPException: If statistics collection fails
+    """
+    try:
+        start_time = datetime.utcnow()
+
+        # Get vector store instance
+        vector_store = get_vector_store()
+
+        # TODO: Implement actual statistics collection
+        # - Query database for document/conversation counts
+        # - Calculate performance metrics
+        # - Collect system resource usage
+        # - Aggregate escalation and feedback statistics
+
+        # For now, simulate statistics
+        system_stats = SystemStats(
+            total_documents=0,  # Would query actual document count
+            total_chunks=0,     # Would query vector store point count
+            total_conversations=0,  # Would query conversation history
+            total_escalations=0,    # Would query escalation records
+            total_feedback=0,       # Would query feedback records
+            avg_response_time_ms=150.5,  # Would calculate from metrics
+            uptime_seconds=3600  # Would calculate actual uptime
+        )
+
+        # Get vector store statistics
+        try:
+            collection_info = vector_store.get_collection_info()
+            vector_stats = VectorStoreStats(
+                collection_name=collection_info["collection_name"],
+                total_points=collection_info["points_count"],
+                vector_size=collection_info["config"]["vector_size"],
+                distance_metric=collection_info["config"]["distance"],
+                index_status="ready",
+                memory_usage_mb=None  # Would get from Qdrant metrics
+            )
+        except Exception as e:
+            logger.warning("Failed to get vector store stats", error=str(e))
+            vector_stats = VectorStoreStats(
+                collection_name=settings.get_collection_name(),
+                total_points=0,
+                vector_size=settings.embed_dim,
+                distance_metric="COSINE",
+                index_status="unknown"
+            )
+
+        end_time = datetime.utcnow()
+        collection_time_ms = int((end_time - start_time).total_seconds() * 1000)
+
+        logger.info(
+            "Admin statistics collected",
+            collection_time_ms=collection_time_ms,
+            total_documents=system_stats.total_documents,
+            total_chunks=vector_stats.total_points
+        )
+
+        return AdminStatsResponse(
+            system=system_stats,
+            vector_store=vector_stats,
+            collection_time=start_time
+        )
+
+    except Exception as e:
+        logger.error("Admin statistics collection failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Statistics collection failed"
+        )
+
+
+@app.get("/admin/health", response_model=AdminHealthResponse)
+async def get_admin_health(
+    settings: Settings = Depends(get_settings)
+) -> AdminHealthResponse:
+    """
+    Get detailed system health information for administrators.
+
+    This endpoint provides comprehensive health checks for:
+    - Vector store connectivity and performance
+    - API response times
+    - System resource usage
+    - External service dependencies
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        Detailed system health information
+
+    Raises:
+        HTTPException: If health check fails
+    """
+    try:
+        components = []
+        overall_healthy = True
+
+        # Check vector store health
+        vector_store = get_vector_store()
+        vector_health = await vector_store.health_check()
+
+        vector_component = SystemHealthDetail(
+            component="vector_store",
+            status=vector_health["status"],
+            response_time_ms=vector_health.get("response_time_ms"),
+            details={
+                "url": vector_health.get("url"),
+                "collection_name": vector_health.get("collection_name"),
+                "collections_count": vector_health.get("collections_count")
+            }
+        )
+        components.append(vector_component)
+
+        if vector_health["status"] != "healthy":
+            overall_healthy = False
+
+        # TODO: Add more component health checks
+        # - Database connectivity
+        # - External API dependencies (OpenAI)
+        # - File system access
+        # - Memory and CPU usage
+        # - Network connectivity
+
+        # API health check (self)
+        api_component = SystemHealthDetail(
+            component="api_server",
+            status="healthy",
+            response_time_ms=1,  # Self-check is always fast
+            details={
+                "version": settings.app_version,
+                "environment": settings.environment,
+                "debug_mode": settings.debug
+            }
+        )
+        components.append(api_component)
+
+        overall_status = "healthy" if overall_healthy else "degraded"
+
+        logger.info(
+            "Admin health check completed",
+            overall_status=overall_status,
+            components_checked=len(components)
+        )
+
+        return AdminHealthResponse(
+            overall_health=overall_status,
+            components=components,
+            checks_performed=len(components)
+        )
+
+    except Exception as e:
+        logger.error("Admin health check failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Health check failed"
+        )
+
+
+@app.get("/admin/config", response_model=AdminConfigResponse)
+async def get_admin_config(
+    settings: Settings = Depends(get_settings)
+) -> AdminConfigResponse:
+    """
+    Get system configuration for administrators.
+
+    This endpoint provides sanitized system configuration information
+    for debugging and monitoring purposes. Sensitive values are masked.
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        System configuration information
+
+    Raises:
+        HTTPException: If configuration retrieval fails
+    """
+    try:
+        config_items = []
+
+        # Application settings
+        config_items.extend([
+            SystemConfigItem(
+                key="app_version",
+                value=settings.app_version,
+                category="application",
+                description="Application version"
+            ),
+            SystemConfigItem(
+                key="environment",
+                value=settings.environment,
+                category="application",
+                description="Runtime environment"
+            ),
+            SystemConfigItem(
+                key="debug",
+                value=str(settings.debug),
+                category="application",
+                description="Debug mode enabled"
+            ),
+            SystemConfigItem(
+                key="tenant_id",
+                value=settings.tenant_id,
+                category="application",
+                description="Tenant identifier"
+            )
+        ])
+
+        # OpenAI settings (sanitized)
+        config_items.extend([
+            SystemConfigItem(
+                key="openai_api_key",
+                value="sk-***" if settings.openai_api_key else "not_set",
+                category="openai",
+                is_sensitive=True,
+                description="OpenAI API key status"
+            ),
+            SystemConfigItem(
+                key="openai_chat_model",
+                value=settings.openai_chat_model,
+                category="openai",
+                description="OpenAI chat model"
+            ),
+            SystemConfigItem(
+                key="openai_embed_model",
+                value=settings.openai_embed_model,
+                category="openai",
+                description="OpenAI embedding model"
+            ),
+            SystemConfigItem(
+                key="embed_dim",
+                value=str(settings.embed_dim),
+                category="openai",
+                description="Embedding dimensions"
+            )
+        ])
+
+        # Qdrant settings
+        config_items.extend([
+            SystemConfigItem(
+                key="qdrant_url",
+                value=settings.qdrant_url,
+                category="qdrant",
+                description="Qdrant server URL"
+            ),
+            SystemConfigItem(
+                key="collection_name",
+                value=settings.get_collection_name(),
+                category="qdrant",
+                description="Vector collection name"
+            ),
+            SystemConfigItem(
+                key="confidence_threshold",
+                value=str(settings.confidence_threshold),
+                category="qdrant",
+                description="Confidence threshold for responses"
+            )
+        ])
+
+        logger.info(
+            "Admin configuration retrieved",
+            config_items_count=len(config_items),
+            environment=settings.environment
+        )
+
+        return AdminConfigResponse(
+            configuration=config_items,
+            environment=settings.environment
+        )
+
+    except Exception as e:
+        logger.error("Admin configuration retrieval failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Configuration retrieval failed"
+        )
+
+
+@app.get("/admin/logs", response_model=AdminLogsResponse)
+async def get_admin_logs(
+    limit: int = 100,
+    level: Optional[str] = None,
+    component: Optional[str] = None,
+    settings: Settings = Depends(get_settings)
+) -> AdminLogsResponse:
+    """
+    Get recent system logs for administrators.
+
+    This endpoint provides access to recent system logs for debugging
+    and monitoring purposes.
+
+    Args:
+        limit: Maximum number of log entries to return (1-1000)
+        level: Filter by log level (debug, info, warning, error)
+        component: Filter by component name
+        settings: Application settings
+
+    Returns:
+        Recent system log entries
+
+    Raises:
+        HTTPException: If log retrieval fails
+    """
+    try:
+        # Validate parameters
+        if limit < 1 or limit > 1000:
+            raise HTTPException(status_code=400, detail="Limit must be between 1 and 1000")
+
+        if level and level.lower() not in ["debug", "info", "warning", "error"]:
+            raise HTTPException(status_code=400, detail="Invalid log level")
+
+        # TODO: Implement actual log retrieval
+        # - Read from log files or log aggregation system
+        # - Apply filters (level, component, time range)
+        # - Parse and format log entries
+        # - Return structured log data
+
+        # For now, simulate recent logs
+        logs = [
+            LogEntry(
+                timestamp=datetime.utcnow(),
+                level="info",
+                message="Admin logs endpoint accessed",
+                component="api_server",
+                context={"limit": limit, "level": level, "component": component}
+            ),
+            LogEntry(
+                timestamp=datetime.utcnow(),
+                level="info",
+                message="Vector store health check completed",
+                component="vector_store",
+                context={"status": "healthy", "response_time_ms": 3}
+            )
+        ]
+
+        # Apply filters if provided
+        if level:
+            logs = [log for log in logs if log.level.lower() == level.lower()]
+
+        if component:
+            logs = [log for log in logs if log.component == component]
+
+        # Limit results
+        logs = logs[:limit]
+
+        time_range = "last_24_hours"  # Would be configurable
+
+        logger.info(
+            "Admin logs retrieved",
+            logs_returned=len(logs),
+            limit=limit,
+            level_filter=level,
+            component_filter=component
+        )
+
+        return AdminLogsResponse(
+            logs=logs,
+            total_logs=len(logs),
+            log_level_filter=level,
+            time_range=time_range
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("Admin logs retrieval failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Logs retrieval failed"
+        )
+
+
+@app.get("/admin/metrics")
+async def get_system_metrics(
+    settings: Settings = Depends(get_settings)
+) -> Dict[str, Any]:
+    """
+    Get comprehensive system performance metrics.
+
+    This endpoint provides detailed performance and usage metrics
+    for system monitoring and optimization.
+
+    Args:
+        settings: Application settings
+
+    Returns:
+        System performance metrics and statistics
+    """
+    try:
+        start_time = datetime.utcnow()
+
+        # Get RAG service for cache metrics
+        rag_service = get_rag_service()
+
+        # System metrics
+        metrics = {
+            "timestamp": start_time.isoformat(),
+            "system": {
+                "uptime_seconds": int((start_time - datetime.utcnow()).total_seconds()),
+                "environment": settings.environment,
+                "version": settings.app_version,
+                "debug_mode": settings.debug
+            },
+            "cache": {
+                "query_cache_size": len(rag_service._query_cache),
+                "cache_max_size": rag_service._cache_max_size,
+                "cache_hit_ratio": "N/A"  # Would need to track hits/misses
+            },
+            "configuration": {
+                "openai_chat_model": settings.openai_chat_model,
+                "openai_embed_model": settings.openai_embed_model,
+                "embed_dim": settings.embed_dim,
+                "confidence_threshold": settings.confidence_threshold,
+                "tenant_id": settings.tenant_id
+            },
+            "endpoints": {
+                "total_endpoints": 13,  # Current endpoint count
+                "health_check": "/health",
+                "chat": "/chat",
+                "documents": "/documents",
+                "search": "/search",
+                "admin": "/admin/*"
+            }
+        }
+
+        # Get vector store metrics
+        try:
+            vector_store = get_vector_store()
+            collection_info = vector_store.get_collection_info()
+            metrics["vector_store"] = {
+                "collection_name": collection_info["collection_name"],
+                "total_points": collection_info["points_count"],
+                "vector_size": collection_info["config"]["vector_size"],
+                "distance_metric": collection_info["config"]["distance"]
+            }
+        except Exception as e:
+            metrics["vector_store"] = {
+                "status": "error",
+                "error": str(e)
+            }
+
+        # Get OpenAI client metrics
+        try:
+            openai_client = get_openai_client()
+            openai_health = await openai_client.health_check()
+            metrics["openai"] = {
+                "status": openai_health["status"],
+                "chat_model": openai_health["chat_model"],
+                "embed_model": openai_health["embed_model"],
+                "embed_dim": openai_health["embed_dim"]
+            }
+        except Exception as e:
+            metrics["openai"] = {
+                "status": "error",
+                "error": str(e)
+            }
+
+        end_time = datetime.utcnow()
+        collection_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        metrics["collection_time_ms"] = collection_time_ms
+
+        logger.info(
+            "System metrics collected",
+            collection_time_ms=collection_time_ms,
+            cache_size=metrics["cache"]["query_cache_size"]
+        )
+
+        return metrics
+
+    except Exception as e:
+        logger.error("System metrics collection failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Metrics collection failed"
         )
