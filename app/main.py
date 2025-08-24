@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 import time
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi import FastAPI, HTTPException, Depends, Header, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 import structlog
@@ -1496,9 +1496,9 @@ async def get_system_metrics(
 
 @app.get("/whatsapp/webhook")
 async def whatsapp_webhook_verify(
-    hub_mode: str = None,
-    hub_verify_token: str = None,
-    hub_challenge: str = None,
+    hub_mode: str = Query(None, alias="hub.mode"),
+    hub_verify_token: str = Query(None, alias="hub.verify_token"),
+    hub_challenge: str = Query(None, alias="hub.challenge"),
     settings: Settings = Depends(get_settings)
 ):
     """
@@ -1535,7 +1535,7 @@ async def whatsapp_webhook_verify(
 
         if challenge:
             logger.info("WhatsApp webhook verification successful")
-            return int(challenge)
+            return challenge
         else:
             logger.warning("WhatsApp webhook verification failed")
             raise HTTPException(
