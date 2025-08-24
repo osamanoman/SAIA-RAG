@@ -71,24 +71,48 @@ class EscalationManager:
             "general": 0.35           # General queries
         }
         
-        # Escalation messages by category
+        # Escalation messages by category and language
         self.escalation_messages = {
-            "troubleshooting": "I want to make sure you get the most accurate technical assistance. Let me connect you with a technical specialist who can help resolve this issue.",
-            "billing": "For billing and payment questions, I'd like to connect you with our billing specialist who can provide detailed assistance with your account.",
-            "setup": "To ensure your setup goes smoothly, let me connect you with a setup specialist who can guide you through the process step by step.",
-            "policies": "For detailed policy information, I'd like to connect you with a specialist who can provide comprehensive guidance on our terms and policies.",
-            "general": "I want to make sure you get the best possible assistance. Let me connect you with a specialist who can help you further."
+            "ar": {
+                "troubleshooting": "أريد التأكد من حصولك على المساعدة التقنية الأكثر دقة. دعني أربطك بأخصائي تقني يمكنه المساعدة في حل هذه المشكلة.",
+                "billing": "بخصوص أسئلة الفواتير والدفع، أود ربطك بأخصائي الفواتير الذي يمكنه تقديم مساعدة مفصلة لحسابك.",
+                "setup": "لضمان سير عملية الإعداد بسلاسة، دعني أربطك بأخصائي الإعداد الذي يمكنه إرشادك خلال العملية خطوة بخطوة.",
+                "policies": "للحصول على معلومات مفصلة عن السياسة، أود ربطك بأخصائي يمكنه تقديم إرشادات شاملة حول شروطنا وسياساتنا.",
+                "general": "أريد التأكد من حصولك على أفضل مساعدة ممكنة. دعني أربطك بأخصائي يمكنه مساعدتك أكثر."
+            },
+            "en": {
+                "troubleshooting": "I want to make sure you get the most accurate technical assistance. Let me connect you with a technical specialist who can help resolve this issue.",
+                "billing": "For billing and payment questions, I'd like to connect you with our billing specialist who can provide detailed assistance with your account.",
+                "setup": "To ensure your setup goes smoothly, let me connect you with a setup specialist who can guide you through the process step by step.",
+                "policies": "For detailed policy information, I'd like to connect you with a specialist who can provide comprehensive guidance on our terms and policies.",
+                "general": "I want to make sure you get the best possible assistance. Let me connect you with a specialist who can help you further."
+            }
         }
         
         logger.info("Escalation manager initialized")
-    
+
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text content."""
+        # Count Arabic characters
+        arabic_chars = sum(1 for char in text if '\u0600' <= char <= '\u06FF')
+        total_chars = len([char for char in text if char.isalpha()])
+
+        if total_chars == 0:
+            return "ar"  # Default to Arabic
+
+        arabic_ratio = arabic_chars / total_chars
+
+        # If more than 30% Arabic characters, consider it Arabic
+        return "ar" if arabic_ratio > 0.3 else "en"
+
     def should_escalate(
         self,
         confidence: float,
         category: str = "general",
         channel: str = "default",
         query_intent: str = "question",
-        sources_count: int = 0
+        sources_count: int = 0,
+        original_query: str = ""
     ) -> EscalationResponse:
         """
         Determine if a response should be escalated.
@@ -117,7 +141,7 @@ class EscalationManager:
             )
             
             if escalation_reason:
-                return self._create_escalation_response(escalation_reason, channel)
+                return self._create_escalation_response(escalation_reason, channel, original_query)
             else:
                 return EscalationResponse(
                     should_escalate=False,
@@ -199,35 +223,57 @@ class EscalationManager:
     def _create_escalation_response(
         self,
         reason: EscalationReason,
-        channel: str
+        channel: str,
+        original_query: str = ""
     ) -> EscalationResponse:
         """Create escalation response with appropriate options."""
-        
-        # Get category-specific message
-        base_message = self.escalation_messages.get(
+
+        # Detect language from original query
+        language = self._detect_language(original_query)
+
+        # Get category-specific message in appropriate language
+        language_messages = self.escalation_messages.get(language, self.escalation_messages["en"])
+        base_message = language_messages.get(
             reason.category,
-            self.escalation_messages["general"]
+            language_messages["general"]
         )
         
-        # Channel-specific escalation options
-        if channel.lower() == "whatsapp":
-            escalation_options = [
-                "Connect me with a specialist",
-                "I'll try a different question",
-                "Send me more information"
-            ]
-            escalation_message = f"{base_message}\n\nWould you like me to connect you with a specialist?"
+        # Channel-specific escalation options based on language
+        if language == "ar":
+            if channel.lower() == "whatsapp":
+                escalation_options = [
+                    "اربطني بأخصائي",
+                    "سأجرب سؤالاً مختلفاً",
+                    "أرسل لي المزيد من المعلومات"
+                ]
+                escalation_message = f"{base_message}\n\nهل تود أن أربطك بأخصائي؟"
+            else:
+                escalation_options = [
+                    "التواصل مع أخصائي",
+                    "تجربة طريقة مختلفة",
+                    "الحصول على المزيد من المعلومات",
+                    "التواصل مع الدعم مباشرة"
+                ]
+                escalation_message = base_message
         else:
-            escalation_options = [
-                "Connect with specialist",
-                "Try different approach",
-                "Get more information",
-                "Contact support directly"
-            ]
-            escalation_message = base_message
+            if channel.lower() == "whatsapp":
+                escalation_options = [
+                    "Connect me with a specialist",
+                    "I'll try a different question",
+                    "Send me more information"
+                ]
+                escalation_message = f"{base_message}\n\nWould you like me to connect you with a specialist?"
+            else:
+                escalation_options = [
+                    "Connect with specialist",
+                    "Try different approach",
+                    "Get more information",
+                    "Contact support directly"
+                ]
+                escalation_message = base_message
         
         # Fallback response for when escalation is declined
-        fallback_response = self._generate_fallback_response(reason.category, channel)
+        fallback_response = self._generate_fallback_response(reason.category, channel, language)
         
         return EscalationResponse(
             should_escalate=True,
@@ -237,46 +283,69 @@ class EscalationManager:
             escalation_options=escalation_options
         )
     
-    def _generate_fallback_response(self, category: str, channel: str) -> str:
+    def _generate_fallback_response(self, category: str, channel: str, language: str = "en") -> str:
         """Generate fallback response when escalation is declined."""
-        
-        fallback_messages = {
-            "troubleshooting": "I'll do my best to help. Could you provide more specific details about the issue you're experiencing?",
-            "billing": "I understand you have billing questions. Could you tell me more specifically what you'd like to know?",
-            "setup": "I'm here to help with setup. Could you let me know which specific step you're having trouble with?",
-            "policies": "I can help with policy questions. Could you be more specific about what policy information you need?",
-            "general": "I'm here to help. Could you provide more details about what you're looking for?"
-        }
-        
-        base_message = fallback_messages.get(category, fallback_messages["general"])
-        
-        if channel.lower() == "whatsapp":
-            return f"{base_message} Feel free to ask me anything else!"
+
+        if language == "ar":
+            fallback_messages = {
+                "troubleshooting": "سأبذل قصارى جهدي للمساعدة. هل يمكنك تقديم تفاصيل أكثر تحديداً حول المشكلة التي تواجهها؟",
+                "billing": "أفهم أن لديك أسئلة حول الفواتير. هل يمكنك إخباري بشكل أكثر تحديداً عما تريد معرفته؟",
+                "setup": "أنا هنا للمساعدة في الإعداد. هل يمكنك إخباري بالخطوة المحددة التي تواجه صعوبة فيها؟",
+                "policies": "يمكنني المساعدة في أسئلة السياسة. هل يمكنك أن تكون أكثر تحديداً حول معلومات السياسة التي تحتاجها؟",
+                "general": "أنا هنا للمساعدة. هل يمكنك تقديم المزيد من التفاصيل حول ما تبحث عنه؟"
+            }
+
+            base_message = fallback_messages.get(category, fallback_messages["general"])
+
+            if channel.lower() == "whatsapp":
+                return f"{base_message} لا تتردد في سؤالي عن أي شيء آخر!"
+            else:
+                return f"{base_message} أنا هنا لمساعدتك في أي أسئلة قد تكون لديك."
         else:
-            return f"{base_message} I'm here to assist you with any questions you might have."
+            fallback_messages = {
+                "troubleshooting": "I'll do my best to help. Could you provide more specific details about the issue you're experiencing?",
+                "billing": "I understand you have billing questions. Could you tell me more specifically what you'd like to know?",
+                "setup": "I'm here to help with setup. Could you let me know which specific step you're having trouble with?",
+                "policies": "I can help with policy questions. Could you be more specific about what policy information you need?",
+                "general": "I'm here to help. Could you provide more details about what you're looking for?"
+            }
+
+            base_message = fallback_messages.get(category, fallback_messages["general"])
+
+            if channel.lower() == "whatsapp":
+                return f"{base_message} Feel free to ask me anything else!"
+            else:
+                return f"{base_message} I'm here to assist you with any questions you might have."
     
     def format_escalation_for_channel(
         self,
         escalation: EscalationResponse,
         channel: str,
-        include_options: bool = True
+        include_options: bool = True,
+        original_query: str = ""
     ) -> str:
         """Format escalation message for specific channel."""
-        
+
         if not escalation.should_escalate:
             return ""
-        
+
         message = escalation.escalation_message
-        
+
         if include_options and escalation.escalation_options:
             if channel.lower() == "whatsapp":
                 # Simple format for WhatsApp
                 return message
             else:
-                # More detailed format for web chat
+                # More detailed format for web chat - make language-aware
+                language = self._detect_language(original_query) if original_query else "en"
+
                 options_text = "\n".join([f"• {option}" for option in escalation.escalation_options])
-                message += f"\n\nOptions:\n{options_text}"
-        
+
+                if language == "ar":
+                    message += f"\n\nالخيارات:\n{options_text}"
+                else:
+                    message += f"\n\nOptions:\n{options_text}"
+
         return message
     
     def log_escalation(

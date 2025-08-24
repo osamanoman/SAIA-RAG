@@ -371,10 +371,13 @@
                     this.elements.messageInput.value = '';
                     this.elements.charCount.textContent = '0/2000';
 
-                    // Send to API
+                    // Send to API with proper authentication
                     const response = await fetch('/chat', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': 'Bearer saia-rag-production-api-key-2024-secure-random-key-12345'
+                        },
                         body: JSON.stringify({
                             message: messageText,
                             conversation_id: this.conversationId
@@ -391,6 +394,8 @@
 
                 } catch (error) {
                     console.error('Send message failed:', error);
+                    console.error('Response status:', response?.status);
+                    console.error('Response text:', await response?.text().catch(() => 'Could not read response'));
                     this.addMessage('system', `Error: ${error.message}`, null, true);
                 } finally {
                     this.isProcessing = false;

@@ -11,7 +11,7 @@ import time
 import asyncio
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import structlog
 
@@ -23,7 +23,7 @@ from .whatsapp_client import get_whatsapp_client
 from .middleware import setup_middleware
 from .models import (
 DocumentUploadRequest, DocumentContentRequest, DocumentResponse, DocumentListResponse,
-DocumentDeleteResponse, ErrorResponse, ChatRequest, ChatResponse,
+DocumentDeleteResponse, ErrorResponse, ChatRequest, ChatResponse, SourceDocument,
 SearchRequest, SearchResponse, EscalationRequest, EscalationResponse,
 FeedbackRequest, FeedbackResponse, AdminStatsResponse, AdminHealthResponse,
 AdminConfigResponse, AdminLogsResponse, SystemStats, VectorStoreStats,
@@ -102,6 +102,7 @@ app = create_application()
 # === AUTHENTICATION ===
 
 async def api_key_auth(
+    request: Request,
     authorization: Optional[str] = Header(None),
     settings: Settings = Depends(get_settings)
 ) -> Optional[str]:
@@ -109,46 +110,35 @@ async def api_key_auth(
     API key authentication dependency.
 
     Args:
+        request: FastAPI request object
         authorization: Authorization header value
         settings: Application settings
 
     Returns:
-        API key if valid, None if not required
+        API key if valid, None if not required (dev only)
 
     Raises:
         HTTPException: If authentication fails in production
     """
-    # Skip authentication in development mode
+    # Skip authentication in development mode only
     if settings.is_development():
         return None
 
-    # Production mode - API key required
+    # Production mode - API key required for all protected endpoints
     if not authorization:
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization header required"
-        )
+        raise HTTPException(status_code=401, detail="Authorization header required")
 
     # Extract API key from Bearer token
     try:
         scheme, token = authorization.split()
         if scheme.lower() != "bearer":
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid authentication scheme"
-            )
+            raise HTTPException(status_code=401, detail="Invalid authentication scheme")
     except ValueError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid authorization header format"
-        )
+        raise HTTPException(status_code=401, detail="Invalid authorization header format")
 
     # Validate API key
     if not settings.api_key or token != settings.api_key:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid API key"
-        )
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
     return token
 
@@ -186,13 +176,16 @@ async def http_exception_handler(request, exc: HTTPException):
         path=str(request.url.path),
         method=request.method
     )
-    return {
-        "error": {
-            "code": exc.status_code,
-            "message": exc.detail,
-            "path": str(request.url.path)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "error": {
+                "code": exc.status_code,
+                "message": exc.detail,
+                "path": str(request.url.path)
+            }
         }
-    }
+    )
 
 
 @app.exception_handler(Exception)
@@ -206,13 +199,16 @@ async def general_exception_handler(request, exc: Exception):
         method=request.method,
         exc_info=True
     )
-    return {
-        "error": {
-            "code": 500,
-            "message": "Internal server error",
-            "path": str(request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": {
+                "code": 500,
+                "message": "Internal server error",
+                "path": str(request.url.path)
+            }
         }
-    }
+    )
 
 
 # === HEALTH CHECK ENDPOINTS ===
@@ -257,7 +253,7 @@ async def health_check(settings: Settings = Depends(get_settings)) -> Dict[str, 
         }
 
         logger.info("Health check requested", status="ok")
-        return health_data
+        return JSONResponse(content=health_data)
 
     except Exception as e:
         logger.error("Health check failed", error=str(e))
@@ -289,7 +285,7 @@ async def root(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
             response_data["redoc"] = "/redoc"
 
         logger.info("Root endpoint accessed")
-        return response_data
+        return JSONResponse(content=response_data)
 
     except Exception as e:
         logger.error("Root endpoint failed", error=str(e))
@@ -766,17 +762,14 @@ async def chat(
         )
 
         # Return a proper error response instead of raising HTTPException
-        return {
-            "status": "error",
-            "timestamp": datetime.utcnow(),
-            "response": "I apologize, but I'm experiencing technical difficulties. Please try again later.",
-            "conversation_id": request.conversation_id,
-            "confidence": 0.0,
-            "sources": [],
-            "processing_time_ms": 0,
-            "tokens_used": 0,
-            "error": str(e)
-        }
+        return ChatResponse(
+            response="I apologize, but I'm experiencing technical difficulties. Please try again later.",
+            conversation_id=request.conversation_id,
+            confidence=0.0,
+            sources=[],
+            processing_time_ms=0,
+            tokens_used=0
+        )
 
 
 @app.post("/search", response_model=SearchResponse)
@@ -1483,7 +1476,7 @@ async def get_system_metrics(
             cache_size=metrics["cache"]["query_cache_size"]
         )
 
-        return metrics
+        return JSONResponse(content=metrics)
 
     except Exception as e:
         logger.error("System metrics collection failed", error=str(e))
@@ -1579,7 +1572,7 @@ async def whatsapp_webhook_receive(
         # Step 1: Respond immediately (within 80ms as per Meta requirements)
         if not settings.is_whatsapp_configured():
             logger.warning("WhatsApp webhook received but not configured")
-            return {"status": "not_configured"}
+            return JSONResponse(content={"status": "not_configured"})
 
         # Parse request body quickly
         request_data = await request.json()
@@ -1593,7 +1586,7 @@ async def whatsapp_webhook_receive(
 
         if not message_data:
             # Not a text message, status update, or parsing failed
-            return {"status": "ignored"}
+            return JSONResponse(content={"status": "ignored"})
 
         # Step 3: Schedule async processing (don't wait for it)
         asyncio.create_task(
@@ -1604,12 +1597,12 @@ async def whatsapp_webhook_receive(
         )
 
         # Step 4: Return immediate success (as required by Meta)
-        return {"status": "received"}
+        return JSONResponse(content={"status": "received"})
 
     except Exception as e:
         # Log error but still return 200 to prevent webhook retries
         logger.error("WhatsApp webhook processing error", error=str(e))
-        return {"status": "error", "message": "Webhook processed with errors"}
+        return JSONResponse(content={"status": "error", "message": "Webhook processed with errors"})
 
 
 async def process_whatsapp_message_async(
@@ -1684,27 +1677,27 @@ async def whatsapp_status(settings: Settings = Depends(get_settings)):
     """
     try:
         if not settings.is_whatsapp_configured():
-            return {
+            return JSONResponse(content={
                 "status": "not_configured",
                 "configured": False,
                 "message": "WhatsApp Business API credentials not configured"
-            }
+            })
 
         whatsapp_client = get_whatsapp_client()
         health_status = await whatsapp_client.health_check()
 
-        return {
+        return JSONResponse(content={
             "status": "configured",
             "configured": True,
             "health": health_status,
             "phone_number_id": settings.whatsapp_phone_number_id,
             "webhook_url": settings.get_webhook_url()
-        }
+        })
 
     except Exception as e:
         logger.error("WhatsApp status check failed", error=str(e))
-        return {
+        return JSONResponse(content={
             "status": "error",
             "configured": settings.is_whatsapp_configured(),
             "error": str(e)
-        }
+        })

@@ -79,7 +79,21 @@ class ResponseFormatter:
         }
         
         logger.info("Response formatter initialized")
-    
+
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text content."""
+        # Count Arabic characters
+        arabic_chars = sum(1 for char in text if '\u0600' <= char <= '\u06FF')
+        total_chars = len([char for char in text if char.isalpha()])
+
+        if total_chars == 0:
+            return "ar"  # Default to Arabic
+
+        arabic_ratio = arabic_chars / total_chars
+
+        # If more than 30% Arabic characters, consider it Arabic
+        return "ar" if arabic_ratio > 0.3 else "en"
+
     def format_response(
         self,
         content: str,
@@ -325,18 +339,31 @@ class ResponseFormatter:
         """Add helpful elements to enhance user experience."""
         
         # Add category-specific helpful endings
-        helpful_endings = {
-            "troubleshooting": "If this doesn't resolve the issue, please let me know what happens when you try these steps.",
-            "billing": "If you have any other billing questions, I'm here to help.",
-            "setup": "Let me know if you need help with any of these steps!",
-            "policies": "If you need clarification on any policy details, feel free to ask.",
-            "general": "Is there anything else I can help you with?"
-        }
+        # Detect language from content
+        language = self._detect_language(content)
+
+        if language == "ar":
+            helpful_endings = {
+                "troubleshooting": "إذا لم يحل هذا المشكلة، يرجى إعلامي بما يحدث عند تجربة هذه الخطوات.",
+                "billing": "إذا كان لديك أي أسئلة أخرى حول الفواتير، أنا هنا للمساعدة.",
+                "setup": "أعلمني إذا كنت بحاجة للمساعدة في أي من هذه الخطوات!",
+                "policies": "إذا كنت بحاجة لتوضيح أي تفاصيل في السياسة، لا تتردد في السؤال.",
+                "general": "هل هناك أي شيء آخر يمكنني مساعدتك به؟"
+            }
+        else:
+            helpful_endings = {
+                "troubleshooting": "If this doesn't resolve the issue, please let me know what happens when you try these steps.",
+                "billing": "If you have any other billing questions, I'm here to help.",
+                "setup": "Let me know if you need help with any of these steps!",
+                "policies": "If you need clarification on any policy details, feel free to ask.",
+                "general": "Is there anything else I can help you with?"
+            }
         
-        # Add helpful ending if not already present
-        ending = helpful_endings.get(category, helpful_endings["general"])
-        if not any(phrase in content.lower() for phrase in ["let me know", "feel free", "anything else"]):
-            content = f"{content}\n\n{ending}"
+        # Disable helpful endings to maintain language consistency
+        # The AI should generate complete responses without additional prompts
+        # ending = helpful_endings.get(category, helpful_endings["general"])
+        # if not any(phrase in content.lower() for phrase in ["let me know", "feel free", "anything else"]):
+        #     content = f"{content}\n\n{ending}"
         
         return content
 

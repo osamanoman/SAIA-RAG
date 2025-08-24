@@ -275,10 +275,12 @@ class RAGService:
                 for i, chunk in enumerate(context_chunks)
             ])
             
-            # Create system prompt for RAG with query context
+            # Detect language and create system prompt for RAG with query context
+            detected_language = self._detect_language(query)
             system_prompt = self._build_system_prompt(
                 context,
-                query_category=query_metadata.get("query_category", "general")
+                query_category=query_metadata.get("query_category", "general"),
+                language=detected_language
             )
 
             # Generate response using OpenAI with processed query
@@ -303,7 +305,8 @@ class RAGService:
                 category=query_metadata.get("query_category", "general"),
                 channel=channel,
                 query_intent=query_metadata.get("query_intent", "question"),
-                sources_count=len(sources)
+                sources_count=len(sources),
+                original_query=query
             )
 
             # Log escalation if triggered
@@ -320,9 +323,12 @@ class RAGService:
             # Get raw response content
             raw_response = str(chat_result["content"]) if chat_result["content"] else "I apologize, but I couldn't generate a response."
 
+            # Clean response for language consistency
+            cleaned_response = self._clean_response_language(raw_response, detected_language)
+
             # Apply response formatting for better customer experience
             formatted_response = self.response_formatter.format_response(
-                content=raw_response,
+                content=cleaned_response,
                 category=query_metadata.get("query_category", "general"),
                 channel=channel,
                 confidence=confidence,
@@ -336,7 +342,7 @@ class RAGService:
             if escalation_result.should_escalate:
                 # Modify response to include escalation message
                 escalation_message = self.escalation_manager.format_escalation_for_channel(
-                    escalation_result, channel, include_options=True
+                    escalation_result, channel, include_options=True, original_query=query
                 )
                 if escalation_message:
                     final_response = f"{final_response}\n\n{escalation_message}"
@@ -399,8 +405,61 @@ class RAGService:
                 "model_used": "fallback",
                 "error": str(e)
             }
-    
-    def _build_system_prompt(self, context: str, query_category: str = "general") -> str:
+
+    def _detect_language(self, text: str) -> str:
+        """Detect language from text content."""
+        # Count Arabic characters
+        arabic_chars = sum(1 for char in text if '\u0600' <= char <= '\u06FF')
+        total_chars = len([char for char in text if char.isalpha()])
+
+        if total_chars == 0:
+            return "ar"  # Default to Arabic
+
+        arabic_ratio = arabic_chars / total_chars
+
+        # If more than 30% Arabic characters, consider it Arabic
+        return "ar" if arabic_ratio > 0.3 else "en"
+
+    def _clean_response_language(self, response: str, target_language: str) -> str:
+        """Clean response to ensure language consistency."""
+        if target_language == "ar":
+            # Remove common English phrases that might be added
+            english_phrases = [
+                "Is there anything else I can help you with?",
+                "Can I help you with anything else?",
+                "How can I assist you further?",
+                "Let me know if you need any other assistance.",
+                "Feel free to ask if you have any other questions."
+            ]
+
+            cleaned_response = response
+            for phrase in english_phrases:
+                cleaned_response = cleaned_response.replace(phrase, "").strip()
+
+            # Remove any remaining English sentences at the end
+            lines = cleaned_response.split('\n')
+            cleaned_lines = []
+
+            for line in lines:
+                line = line.strip()
+                if line:
+                    # Check if line is mostly English
+                    english_chars = sum(1 for char in line if char.isalpha() and 'a' <= char.lower() <= 'z')
+                    total_chars = sum(1 for char in line if char.isalpha())
+
+                    if total_chars > 0:
+                        english_ratio = english_chars / total_chars
+                        # Skip lines that are mostly English (>70%)
+                        if english_ratio <= 0.7:
+                            cleaned_lines.append(line)
+                    else:
+                        cleaned_lines.append(line)
+
+            return '\n'.join(cleaned_lines).strip()
+
+        return response
+
+    def _build_system_prompt(self, context: str, query_category: str = "general", language: str = "ar") -> str:
         """
         Build system prompt for RAG response generation.
 
@@ -441,7 +500,33 @@ class RAGService:
 
         specific_instructions = category_instructions.get(query_category, category_instructions["general"])
 
-        return f"""You are SAIA, a helpful AI assistant for customer support. Your role is to provide accurate, helpful responses based on the provided context.
+        if language == "ar":
+            return f"""أنت SAIA، مساعد ذكي متخصص في خدمة العملاء. مهمتك تقديم إجابات دقيقة ومفيدة باللغة العربية فقط بناءً على السياق المقدم.
+
+معلومات السياق:
+{context}
+
+فئة الاستفسار: {query_category}
+
+التعليمات المهمة جداً:
+1. أجب على سؤال المستخدم باستخدام المعلومات المتوفرة في السياق أعلاه فقط
+2. إذا لم يحتوي السياق على معلومات كافية للإجابة، اذكر ذلك بوضوح
+3. كن مختصراً ولكن شاملاً في إجابتك
+4. حافظ على نبرة مهذبة ومهنية
+5. إذا سأل المستخدم عن شيء غير مغطى في السياق، اشرح بأدب أن هذه المعلومات غير متوفرة
+6. أجب باللغة العربية فقط - لا تستخدم أي كلمات إنجليزية أبداً
+7. لا تضع أي عبارات إنجليزية في نهاية الإجابة مثل "Is there anything else I can help you with?"
+8. لا تسأل إذا كان هناك شيء آخر يمكنك مساعدة المستخدم به - فقط أجب على السؤال المطروح
+9. انهِ إجابتك بنقطة (.) ولا تضف أي نص إضافي
+
+إرشادات خاصة بالفئة:
+{specific_instructions}
+
+مهم جداً: أجب باللغة العربية فقط. لا تضع أي نص إنجليزي في أي جزء من الإجابة.
+
+تذكر: استخدم فقط السياق المقدم أعلاه للإجابة على الأسئلة. لا تستخدم معرفة خارجية تتجاوز ما هو مقدم في السياق. أجب باللغة العربية فقط."""
+        else:
+            return f"""You are SAIA, a helpful AI assistant for customer support. Your role is to provide accurate, helpful responses in English only based on the provided context.
 
 CONTEXT INFORMATION:
 {context}
@@ -455,11 +540,12 @@ GENERAL INSTRUCTIONS:
 4. If you reference specific information, you can mention it comes from the provided sources
 5. Maintain a helpful, professional tone
 6. If the user asks about something not covered in the context, politely explain that you don't have that information available
+7. Answer in English only - do not use any Arabic words
 
 CATEGORY-SPECIFIC GUIDANCE:
 {specific_instructions}
 
-ESCALATION: If confidence is low or the question requires human expertise, suggest: "I'd be happy to connect you with a specialist who can provide more detailed assistance."
+IMPORTANT: Answer in English only. Do not add any Arabic text in any part of the response.
 
 Remember: Only use the context provided above to answer questions. Do not use external knowledge beyond what's given in the context."""
     

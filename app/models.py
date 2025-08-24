@@ -42,9 +42,9 @@ class FeedbackCategory(str, Enum):
 
 class BaseResponse(BaseModel):
     """Base response model with common fields."""
-    status: str = Field(..., description="Response status")
+    status: str = Field(default="success", description="Response status")
     timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
-    
+
     model_config = ConfigDict(
         json_encoders={datetime: lambda v: v.isoformat()},
         use_enum_values=True
@@ -237,7 +237,7 @@ class SourceDocument(BaseModel):
     chunk_id: str = Field(..., description="Source chunk ID")
     title: Optional[str] = Field(None, description="Document title")
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
-    text_excerpt: Optional[str] = Field(None, max_length=200, description="Relevant text excerpt")
+    text_excerpt: Optional[str] = Field(None, max_length=500, description="Relevant text excerpt")
 
     @field_validator("relevance_score")
     @classmethod
@@ -260,7 +260,6 @@ class SourceDocument(BaseModel):
 
 class ChatResponse(BaseResponse):
     """Chat response model."""
-    status: str = Field(default="success", description="Success status")
     response: str = Field(..., description="AI assistant response")
     conversation_id: Optional[str] = Field(None, description="Conversation identifier")
     confidence: float = Field(..., ge=0.0, le=1.0, description="Response confidence score")
