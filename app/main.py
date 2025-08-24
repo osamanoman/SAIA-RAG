@@ -5,22 +5,24 @@ Main application entry point with health checks, error handling, and logging.
 Follows clean architecture patterns with proper dependency injection.
 """
 
-import logging
 from datetime import datetime
 from typing import Dict, Any, Optional, List
 import time
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Depends
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Depends, Header
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import structlog
 
 from .config import get_settings, Settings
 from .vector_store import get_vector_store
 from .rag_service import get_rag_service
 from .openai_client import get_openai_client
+from .whatsapp_client import get_whatsapp_client
+from .middleware import setup_middleware
 from .models import (
-DocumentUploadRequest, DocumentResponse, DocumentListResponse,
+DocumentUploadRequest, DocumentContentRequest, DocumentResponse, DocumentListResponse,
 DocumentDeleteResponse, ErrorResponse, ChatRequest, ChatResponse,
 SearchRequest, SearchResponse, EscalationRequest, EscalationResponse,
 FeedbackRequest, FeedbackResponse, AdminStatsResponse, AdminHealthResponse,
@@ -58,68 +60,97 @@ def create_application() -> FastAPI:
     Returns:
         Configured FastAPI application instance
     """
-settings = get_settings()
+    settings = get_settings()
 
-# Configure app based on environment
-app_config = {
-    "title": settings.app_name,
-    "description": "RAG-based customer support chatbot with smart fallbacks",
-    "version": settings.app_version,
-}
+    # Configure app based on environment
+    app_config = {
+        "title": settings.app_name,
+        "description": "RAG-based customer support chatbot with smart fallbacks",
+        "version": settings.app_version,
+    }
 
-# Disable docs in production
-if settings.is_production():
-    app_config.update({
-        "docs_url": None,
-        "redoc_url": None,
-        "openapi_url": None
-    })
+    # Disable docs in production
+    if settings.is_production():
+        app_config.update({
+            "docs_url": None,
+            "redoc_url": None,
+            "openapi_url": None
+        })
 
-app = FastAPI(**app_config)
+    app = FastAPI(**app_config)
 
-logger.info(
-    "FastAPI application created",
-    environment=settings.environment,
-    debug=settings.debug,
-    version=settings.app_version
-)
+    # Mount static files for web UI
+    app.mount("/static", StaticFiles(directory="static"), name="static")
 
-return app
+    # Setup middleware in correct order
+    setup_middleware(app)
+
+    logger.info(
+        "FastAPI application created",
+        environment=settings.environment,
+        debug=settings.debug,
+        version=settings.app_version
+    )
+
+    return app
 
 
 # Create application instance
 app = create_application()
 
 
-# === MIDDLEWARE ===
+# === AUTHENTICATION ===
 
-@app.middleware("http")
-async def performance_monitoring_middleware(request, call_next):
-    """Monitor request performance and log metrics."""
-    start_time = time.time()
+async def api_key_auth(
+    authorization: Optional[str] = Header(None),
+    settings: Settings = Depends(get_settings)
+) -> Optional[str]:
+    """
+    API key authentication dependency.
 
-    # Process request
-    response = await call_next(request)
+    Args:
+        authorization: Authorization header value
+        settings: Application settings
 
-    # Calculate processing time
-    process_time = time.time() - start_time
-    process_time_ms = int(process_time * 1000)
+    Returns:
+        API key if valid, None if not required
 
-    # Add performance headers
-    response.headers["X-Process-Time"] = str(process_time_ms)
-    response.headers["X-Timestamp"] = str(int(start_time))
+    Raises:
+        HTTPException: If authentication fails in production
+    """
+    # Skip authentication in development mode
+    if settings.is_development():
+        return None
 
-    # Log performance metrics for slow requests
-    if process_time_ms > 1000:  # Log requests taking more than 1 second
-        logger.warning(
-            "Slow request detected",
-            method=request.method,
-            url=str(request.url),
-            status_code=response.status_code,
-            process_time_ms=process_time_ms
+    # Production mode - API key required
+    if not authorization:
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization header required"
         )
 
-    return response
+    # Extract API key from Bearer token
+    try:
+        scheme, token = authorization.split()
+        if scheme.lower() != "bearer":
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid authentication scheme"
+            )
+    except ValueError:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid authorization header format"
+        )
+
+    # Validate API key
+    if not settings.api_key or token != settings.api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid API key"
+        )
+
+    return token
 
 
 # === APPLICATION EVENTS ===
@@ -197,110 +228,139 @@ async def health_check(settings: Settings = Depends(get_settings)) -> Dict[str, 
         Health status with service information and dependency checks
     """
     try:
-    # Check vector store health
-    vector_store = get_vector_store()
-    vector_health = await vector_store.health_check()
+        # Check vector store health
+        vector_store = get_vector_store()
+        vector_health = await vector_store.health_check()
 
-    # Check OpenAI health
-    openai_client = get_openai_client()
-    openai_health = await openai_client.health_check()
+        # Check OpenAI health
+        openai_client = get_openai_client()
+        openai_health = await openai_client.health_check()
 
-    # Determine overall status based on dependencies
-    all_healthy = (
-        vector_health["status"] == "healthy" and
-        openai_health["status"] == "healthy"
-    )
-    overall_status = "ok" if all_healthy else "degraded"
+        # Determine overall status based on dependencies
+        all_healthy = (
+            vector_health["status"] == "healthy" and
+            openai_health["status"] == "healthy"
+        )
+        overall_status = "ok" if all_healthy else "degraded"
 
-    # Basic service health
-    health_data = {
-        "status": overall_status,
-        "service": "SAIA-RAG API",
-        "version": settings.app_version,
-        "timestamp": datetime.utcnow().isoformat(),
-        "environment": settings.environment,
-        "dependencies": {
-            "vector_store": vector_health,
-            "openai": openai_health
+        # Basic service health
+        health_data = {
+            "status": overall_status,
+            "service": "SAIA-RAG API",
+            "version": settings.app_version,
+            "timestamp": datetime.utcnow().isoformat(),
+            "environment": settings.environment,
+            "dependencies": {
+                "vector_store": vector_health,
+                "openai": openai_health
+            }
         }
-    }
 
-    logger.info("Health check requested", status="ok")
-    return health_data
+        logger.info("Health check requested", status="ok")
+        return health_data
 
-except Exception as e:
-    logger.error("Health check failed", error=str(e))
-    raise HTTPException(
-        status_code=503,
-        detail="Service health check failed"
-    )
+    except Exception as e:
+        logger.error("Health check failed", error=str(e))
+        raise HTTPException(
+            status_code=503,
+            detail="Service health check failed"
+        )
 
 
 @app.get("/")
 async def root(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
-"""
-Root endpoint with service information.
+    """
+    Root endpoint with service information.
 
-Returns:
-    Basic service information and available endpoints
-"""
-try:
-    response_data = {
-        "message": settings.app_name,
-        "status": "running",
-        "version": settings.app_version,
-        "environment": settings.environment,
-    }
+    Returns:
+        Basic service information and available endpoints
+    """
+    try:
+        response_data = {
+            "message": settings.app_name,
+            "status": "running",
+            "version": settings.app_version,
+            "environment": settings.environment,
+        }
 
-    # Add docs URL only in development
-    if settings.is_development():
-        response_data["docs"] = "/docs"
-        response_data["redoc"] = "/redoc"
+        # Add docs URL only in development
+        if settings.is_development():
+            response_data["docs"] = "/docs"
+            response_data["redoc"] = "/redoc"
 
-    logger.info("Root endpoint accessed")
-    return response_data
+        logger.info("Root endpoint accessed")
+        return response_data
 
-except Exception as e:
-    logger.error("Root endpoint failed", error=str(e))
-    raise HTTPException(
-        status_code=500,
-        detail="Internal server error"
-    )
+    except Exception as e:
+        logger.error("Root endpoint failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
+
+
+@app.get("/ui", response_class=HTMLResponse)
+async def web_ui():
+    """
+    Serve the web UI for SAIA-RAG chat interface.
+
+    Returns:
+        HTML response with the chat interface
+    """
+    try:
+        with open("static/index.html", "r", encoding="utf-8") as f:
+            html_content = f.read()
+        return HTMLResponse(content=html_content)
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail="Web UI not found"
+        )
+    except Exception as e:
+        logger.error("Failed to serve web UI", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to load web UI"
+        )
+
+
+
+
 
 
 # === DOCUMENT MANAGEMENT ENDPOINTS ===
 
 @app.post("/documents/upload", response_model=DocumentResponse)
 async def upload_document(
-request: DocumentUploadRequest,
-content: Optional[str] = None,
-settings: Settings = Depends(get_settings)
+    request: DocumentUploadRequest,
+    content: Optional[str] = None,
+    settings: Settings = Depends(get_settings)
 ) -> DocumentResponse:
-"""
-Upload and process a document for the RAG knowledge base.
+    """
+    Upload and process a document for the RAG knowledge base.
 
-This endpoint processes document content through the complete RAG pipeline:
-- Text extraction and cleaning
-- Intelligent chunking with overlap
-- OpenAI embedding generation
-- Vector store indexing
+    This endpoint processes document content through the complete RAG pipeline:
+    - Text extraction and cleaning
+    - Intelligent chunking with overlap
+    - OpenAI embedding generation
+    - Vector store indexing
 
-Args:
-    request: Document upload request with metadata
-    content: Document content (optional - uses sample content if not provided)
-    settings: Application settings
+    Args:
+        request: Document upload request with metadata
+        content: Document content (optional - uses sample content if not provided)
+        settings: Application settings
 
-Returns:
-    Document processing result with chunk information
+    Returns:
+        Document processing result with chunk information
 
-Raises:
-    HTTPException: If document processing fails
-"""
-try:
-    start_time = datetime.utcnow()
+    Raises:
+        HTTPException: If document processing fails
+    """
+    try:
+        start_time = datetime.utcnow()
 
-    # Use provided content or default sample content
-    document_content = content or """
+        # Use provided content or default sample content
+        document_content = content or """
     Password Reset Instructions:
 
     1. Go to the login page and click "Forgot Password"
@@ -326,140 +386,127 @@ try:
     - Email not received: Check spam folder and verify email address
     """
 
-    # Get RAG service
-    rag_service = get_rag_service()
+        # Get RAG service
+        rag_service = get_rag_service()
 
-    # Process document through RAG pipeline
-    ingestion_result = await rag_service.ingest_document(
-        content=document_content,
-        metadata=request.metadata.dict(),
-        content_type="text/plain"
-    )
-
-    if not ingestion_result["success"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Document processing failed: {ingestion_result['error']}"
+        # Process document through RAG pipeline
+        ingestion_result = await rag_service.ingest_document(
+            content=document_content,
+            metadata=request.metadata.dict(),
+            content_type="text/plain"
         )
 
-    end_time = datetime.utcnow()
-    total_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        if not ingestion_result["success"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document processing failed: {ingestion_result['error']}"
+            )
 
-    logger.info(
-        "Document upload completed",
-        document_id=ingestion_result["document_id"],
-        title=request.metadata.title,
-        category=request.metadata.category,
-        chunks_created=ingestion_result["chunks_created"],
-        total_time_ms=total_time_ms
-    )
+        end_time = datetime.utcnow()
+        total_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
-    return DocumentResponse(
-        document_id=ingestion_result["document_id"],
-        title=request.metadata.title,
-        category=request.metadata.category,
-        chunks_created=ingestion_result["chunks_created"],
-        processing_time_ms=total_time_ms,
-        upload_date=start_time
-    )
+        logger.info(
+            "Document upload completed",
+            document_id=ingestion_result["document_id"],
+            title=request.metadata.title,
+            category=request.metadata.category,
+            chunks_created=ingestion_result["chunks_created"],
+            total_time_ms=total_time_ms
+        )
 
-except HTTPException:
-    raise
-except Exception as e:
-    logger.error("Document upload failed", error=str(e))
-    raise HTTPException(
-        status_code=500,
-        detail="Document upload processing failed"
-    )
+        return DocumentResponse(
+            document_id=ingestion_result["document_id"],
+            title=request.metadata.title,
+            category=request.metadata.category,
+            chunks_created=ingestion_result["chunks_created"],
+            processing_time_ms=total_time_ms,
+            upload_date=start_time
+        )
 
-
-class DocumentContentRequest(BaseModel):
-"""Document content upload request."""
-title: str = Field(..., min_length=1, max_length=200, description="Document title")
-content: str = Field(..., min_length=10, description="Document content")
-category: str = Field(default="general", max_length=50, description="Document category")
-tags: List[str] = Field(default=[], description="Document tags")
-author: Optional[str] = Field(None, max_length=100, description="Document author")
+    except Exception as e:
+        logger.error("Document upload failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Document upload failed"
+        )
 
 
 @app.post("/documents/upload-content", response_model=DocumentResponse)
 async def upload_document_with_content(
-request: DocumentContentRequest,
-settings: Settings = Depends(get_settings)
+    request: DocumentContentRequest,
+    settings: Settings = Depends(get_settings)
 ) -> DocumentResponse:
-"""
-Upload a document with custom content.
+    """
+    Upload a document with custom content.
 
-This endpoint allows you to upload documents with your own content
-instead of using the default sample content.
+    This endpoint allows you to upload documents with your own content
+    instead of using the default sample content.
 
-Args:
-    request: Document content upload request
-    settings: Application settings
+    Args:
+        request: Document content upload request
+        settings: Application settings
 
-Returns:
-    Document processing result with chunk information
+    Returns:
+        Document processing result with chunk information
 
-Raises:
-    HTTPException: If document processing fails
-"""
-try:
-    start_time = datetime.utcnow()
+    Raises:
+        HTTPException: If document processing fails
+    """
+    try:
+        start_time = datetime.utcnow()
 
-    # Create metadata
-    metadata = {
-        "title": request.title,
-        "category": request.category,
-        "tags": request.tags,
-        "author": request.author
-    }
+        # Create metadata
+        metadata = {
+            "title": request.title,
+            "category": request.category,
+            "tags": request.tags,
+            "author": request.author
+        }
 
-    # Get RAG service
-    rag_service = get_rag_service()
+        # Get RAG service
+        rag_service = get_rag_service()
 
-    # Process document through RAG pipeline
-    ingestion_result = await rag_service.ingest_document(
-        content=request.content,
-        metadata=metadata,
-        content_type="text/plain"
-    )
-
-    if not ingestion_result["success"]:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Document processing failed: {ingestion_result['error']}"
+        # Process document through RAG pipeline
+        ingestion_result = await rag_service.ingest_document(
+            content=request.content,
+            metadata=metadata,
+            content_type="text/plain"
         )
 
-    end_time = datetime.utcnow()
-    total_time_ms = int((end_time - start_time).total_seconds() * 1000)
+        if not ingestion_result["success"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document processing failed: {ingestion_result['error']}"
+            )
 
-    logger.info(
-        "Document with content uploaded",
-        document_id=ingestion_result["document_id"],
-        title=request.title,
-        category=request.category,
-        content_length=len(request.content),
-        chunks_created=ingestion_result["chunks_created"],
-        total_time_ms=total_time_ms
-    )
+        end_time = datetime.utcnow()
+        total_time_ms = int((end_time - start_time).total_seconds() * 1000)
 
-    return DocumentResponse(
-        document_id=ingestion_result["document_id"],
-        title=request.title,
-        category=request.category,
-        chunks_created=ingestion_result["chunks_created"],
-        processing_time_ms=total_time_ms,
-        upload_date=start_time
-    )
+        logger.info(
+            "Document with content uploaded",
+            document_id=ingestion_result["document_id"],
+            title=request.title,
+            category=request.category,
+            content_length=len(request.content),
+            chunks_created=ingestion_result["chunks_created"],
+            total_time_ms=total_time_ms
+        )
 
-except HTTPException:
-    raise
-except Exception as e:
-    logger.error("Document content upload failed", error=str(e))
-    raise HTTPException(
-        status_code=500,
-        detail="Document upload processing failed"
-    )
+        return DocumentResponse(
+            document_id=ingestion_result["document_id"],
+            title=request.title,
+            category=request.category,
+            chunks_created=ingestion_result["chunks_created"],
+            processing_time_ms=total_time_ms,
+            upload_date=start_time
+        )
+
+    except Exception as e:
+        logger.error("Document content upload failed", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Document upload processing failed"
+        )
 
 
 @app.get("/documents", response_model=DocumentListResponse)
@@ -493,15 +540,46 @@ async def list_documents(
         if offset < 0:
             raise HTTPException(status_code=400, detail="Offset must be non-negative")
 
-        # TODO: Implement actual document listing
-        # - Query vector store for document metadata
-        # - Apply filters (category, search)
-        # - Implement pagination
-        # - Return document list with metadata
+        # Get vector store instance
+        vector_store = get_vector_store()
 
-        # For now, return empty list
+        # Get all documents from vector store
+        all_documents = vector_store.list_documents()
+
+        # Apply category filter if provided
+        if category:
+            all_documents = [doc for doc in all_documents if doc.get('category') == category]
+
+        # Apply search filter if provided
+        if search:
+            search_lower = search.lower()
+            all_documents = [
+                doc for doc in all_documents
+                if search_lower in (doc.get('title', '') or '').lower() or
+                   search_lower in (doc.get('category', '') or '').lower() or
+                   any(search_lower in tag.lower() for tag in doc.get('tags', []))
+            ]
+
+        # Calculate pagination
+        total = len(all_documents)
+        start_idx = offset
+        end_idx = min(offset + limit, total)
+        paginated_documents = all_documents[start_idx:end_idx]
+
+        # Convert to DocumentListItem format
+        from .models import DocumentListItem, DocumentStatus
         documents = []
-        total = 0
+        for doc in paginated_documents:
+            documents.append(DocumentListItem(
+                document_id=doc['document_id'],
+                title=doc.get('title'),
+                category=doc.get('category'),
+                tags=doc.get('tags', []),
+                chunk_count=doc.get('chunk_count', 0),
+                status=DocumentStatus.PROCESSED,
+                upload_date=datetime.fromisoformat(doc['upload_date']) if doc.get('upload_date') else datetime.utcnow(),
+                author=doc.get('author')
+            ))
 
         logger.info(
             "Documents listed",
@@ -599,6 +677,7 @@ async def delete_document(
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
+    api_key: Optional[str] = Depends(api_key_auth),
     settings: Settings = Depends(get_settings)
 ) -> ChatResponse:
     """
@@ -773,6 +852,7 @@ async def search_documents(
 @app.post("/escalate", response_model=EscalationResponse)
 async def escalate(
     request: EscalationRequest,
+    api_key: Optional[str] = Depends(api_key_auth),
     settings: Settings = Depends(get_settings)
 ) -> EscalationResponse:
     """
@@ -847,6 +927,7 @@ async def escalate(
 @app.post("/feedback", response_model=FeedbackResponse)
 async def feedback(
     request: FeedbackRequest,
+    api_key: Optional[str] = Depends(api_key_auth),
     settings: Settings = Depends(get_settings)
 ) -> FeedbackResponse:
     """
@@ -1409,3 +1490,195 @@ async def get_system_metrics(
             status_code=500,
             detail="Metrics collection failed"
         )
+
+
+# === WHATSAPP BUSINESS API ENDPOINTS ===
+
+@app.get("/whatsapp/webhook")
+async def whatsapp_webhook_verify(
+    hub_mode: str = None,
+    hub_verify_token: str = None,
+    hub_challenge: str = None,
+    settings: Settings = Depends(get_settings)
+):
+    """
+    WhatsApp webhook verification endpoint.
+
+    This endpoint is called by WhatsApp to verify the webhook URL
+    during the initial setup process.
+
+    Args:
+        hub_mode: Verification mode from WhatsApp
+        hub_verify_token: Verification token from WhatsApp
+        hub_challenge: Challenge string from WhatsApp
+        settings: Application settings
+
+    Returns:
+        Challenge string if verification succeeds
+
+    Raises:
+        HTTPException: If verification fails
+    """
+    try:
+        if not settings.is_whatsapp_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="WhatsApp integration not configured"
+            )
+
+        whatsapp_client = get_whatsapp_client()
+        challenge = whatsapp_client.verify_webhook(
+            mode=hub_mode,
+            token=hub_verify_token,
+            challenge=hub_challenge
+        )
+
+        if challenge:
+            logger.info("WhatsApp webhook verification successful")
+            return int(challenge)
+        else:
+            logger.warning("WhatsApp webhook verification failed")
+            raise HTTPException(
+                status_code=403,
+                detail="Webhook verification failed"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("WhatsApp webhook verification error", error=str(e))
+        raise HTTPException(
+            status_code=500,
+            detail="Webhook verification failed"
+        )
+
+
+@app.post("/whatsapp/webhook")
+async def whatsapp_webhook_receive(
+    request_data: Dict[str, Any],
+    settings: Settings = Depends(get_settings)
+):
+    """
+    WhatsApp webhook message receiver endpoint.
+
+    This endpoint receives incoming WhatsApp messages and processes them
+    through the RAG system to generate AI-powered responses.
+
+    Args:
+        request_data: Webhook payload from WhatsApp
+        settings: Application settings
+
+    Returns:
+        Success confirmation
+
+    Raises:
+        HTTPException: If message processing fails
+    """
+    try:
+        if not settings.is_whatsapp_configured():
+            raise HTTPException(
+                status_code=503,
+                detail="WhatsApp integration not configured"
+            )
+
+        whatsapp_client = get_whatsapp_client()
+
+        # Parse the incoming message
+        message_data = whatsapp_client.parse_webhook_message(request_data)
+
+        if not message_data:
+            # Not a text message or parsing failed
+            return {"status": "ignored"}
+
+        # Extract message details
+        user_phone = message_data["from"]
+        user_message = message_data["text"]
+        message_id = message_data["message_id"]
+
+        logger.info(
+            "WhatsApp message received",
+            from_number=user_phone,
+            message_id=message_id,
+            message_length=len(user_message)
+        )
+
+        # Process message through RAG system
+        rag_service = get_rag_service()
+        rag_response = await rag_service.generate_response(
+            query=user_message,
+            conversation_id=f"whatsapp_{user_phone}",
+            max_context_chunks=5,  # Limit for faster WhatsApp responses
+            confidence_threshold=settings.confidence_threshold
+        )
+
+        # Send RAG response back via WhatsApp
+        send_result = await whatsapp_client.send_rag_response(
+            to=user_phone,
+            rag_response=rag_response,
+            include_sources=True
+        )
+
+        logger.info(
+            "WhatsApp RAG response sent",
+            to=user_phone,
+            message_id=send_result.get("message_id"),
+            confidence=rag_response.get("confidence"),
+            processing_time_ms=rag_response.get("processing_time_ms")
+        )
+
+        return {
+            "status": "processed",
+            "message_id": message_id,
+            "response_sent": send_result.get("success", False),
+            "confidence": rag_response.get("confidence"),
+            "processing_time_ms": rag_response.get("processing_time_ms")
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(
+            "WhatsApp message processing failed",
+            error=str(e),
+            request_data=request_data
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Message processing failed"
+        )
+
+
+@app.get("/whatsapp/status")
+async def whatsapp_status(settings: Settings = Depends(get_settings)):
+    """
+    Get WhatsApp integration status and health.
+
+    Returns:
+        WhatsApp integration status and configuration
+    """
+    try:
+        if not settings.is_whatsapp_configured():
+            return {
+                "status": "not_configured",
+                "configured": False,
+                "message": "WhatsApp Business API credentials not configured"
+            }
+
+        whatsapp_client = get_whatsapp_client()
+        health_status = await whatsapp_client.health_check()
+
+        return {
+            "status": "configured",
+            "configured": True,
+            "health": health_status,
+            "phone_number_id": settings.whatsapp_phone_number_id,
+            "webhook_url": "/whatsapp/webhook"
+        }
+
+    except Exception as e:
+        logger.error("WhatsApp status check failed", error=str(e))
+        return {
+            "status": "error",
+            "configured": settings.is_whatsapp_configured(),
+            "error": str(e)
+        }

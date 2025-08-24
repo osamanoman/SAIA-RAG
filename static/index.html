@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAIA-RAG AI Assistant</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <i class="fas fa-robot"></i>
+                <h1>SAIA-RAG</h1>
+                <span class="subtitle">AI Assistant</span>
+            </div>
+            <div class="header-controls">
+                <button id="theme-toggle" class="btn-icon" title="Toggle theme">
+                    <i class="fas fa-moon"></i>
+                </button>
+                <button id="documents-btn" class="btn-icon" title="Manage Documents">
+                    <i class="fas fa-folder"></i>
+                </button>
+                <button id="settings-btn" class="btn-icon" title="Settings">
+                    <i class="fas fa-cog"></i>
+                </button>
+                <div class="status-indicator">
+                    <div id="connection-status" class="status-dot status-connecting"></div>
+                    <span id="status-text">Connecting...</span>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Chat Container -->
+    <main class="chat-container">
+        <!-- Chat Messages Area -->
+        <div id="chat-messages" class="chat-messages">
+            <!-- Welcome Message -->
+            <div class="message system-message">
+                <div class="message-content">
+                    <div class="message-header">
+                        <i class="fas fa-robot"></i>
+                        <span class="sender">SAIA-RAG Assistant</span>
+                        <span class="timestamp">Just now</span>
+                    </div>
+                    <div class="message-text">
+                        👋 Hello! I'm your AI assistant powered by RAG (Retrieval-Augmented Generation). 
+                        I can help you with questions based on the knowledge base. Ask me anything!
+                    </div>
+                    <div class="message-footer">
+                        <div class="system-info">
+                            <span class="info-item">
+                                <i class="fas fa-brain"></i>
+                                GPT-4o-mini
+                            </span>
+                            <span class="info-item">
+                                <i class="fas fa-database"></i>
+                                Vector Search
+                            </span>
+                            <span class="info-item">
+                                <i class="fas fa-shield-alt"></i>
+                                Secure
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Typing Indicator -->
+        <div id="typing-indicator" class="typing-indicator hidden">
+            <div class="message ai-message">
+                <div class="message-content">
+                    <div class="message-header">
+                        <i class="fas fa-robot"></i>
+                        <span class="sender">AI Assistant</span>
+                    </div>
+                    <div class="typing-animation">
+                        <div class="typing-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <span class="typing-text">Thinking...</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Input Area -->
+        <div class="chat-input-container">
+            <div class="chat-input-wrapper">
+                <div class="input-group">
+                    <textarea 
+                        id="message-input" 
+                        class="message-input" 
+                        placeholder="Ask me anything about the knowledge base..."
+                        rows="1"
+                        maxlength="2000"
+                    ></textarea>
+                    <button id="send-button" class="send-button" disabled>
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
+                <div class="input-footer">
+                    <div class="input-info">
+                        <span id="char-count">0/2000</span>
+                        <span class="separator">•</span>
+                        <span class="powered-by">
+                            <i class="fas fa-bolt"></i>
+                            Powered by OpenAI
+                        </span>
+                    </div>
+                    <div class="input-actions">
+                        <button id="clear-chat" class="btn-text" title="Clear conversation">
+                            <i class="fas fa-trash"></i>
+                            Clear
+                        </button>
+                        <button id="export-chat" class="btn-text" title="Export conversation">
+                            <i class="fas fa-download"></i>
+                            Export
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Settings</h2>
+                <button id="close-settings" class="btn-icon">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="setting-group">
+                    <label for="confidence-threshold">Confidence Threshold</label>
+                    <input type="range" id="confidence-threshold" min="0" max="1" step="0.1" value="0.35">
+                    <span id="confidence-value">0.35</span>
+                </div>
+                <div class="setting-group">
+                    <label for="max-sources">Maximum Sources</label>
+                    <input type="number" id="max-sources" min="1" max="10" value="3">
+                </div>
+                <div class="setting-group">
+                    <label>
+                        <input type="checkbox" id="show-sources" checked>
+                        Show source citations
+                    </label>
+                </div>
+                <div class="setting-group">
+                    <label>
+                        <input type="checkbox" id="show-confidence" checked>
+                        Show confidence scores
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="reset-settings" class="btn-secondary">Reset to Default</button>
+                <button id="save-settings" class="btn-primary">Save Settings</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Document Management Modal -->
+    <div id="documents-modal" class="modal hidden">
+        <div class="modal-content" style="max-width: 800px;">
+            <div class="modal-header">
+                <h2>Document Management</h2>
+                <button id="close-documents" class="btn-icon">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <!-- Upload Section -->
+                <div class="section">
+                    <h3>Upload New Document</h3>
+                    <div class="upload-form">
+                        <div class="form-group">
+                            <label for="doc-title">Title</label>
+                            <input type="text" id="doc-title" placeholder="Document title" maxlength="200">
+                        </div>
+                        <div class="form-group">
+                            <label for="doc-category">Category</label>
+                            <input type="text" id="doc-category" placeholder="e.g., FAQ, Policy, Guide" maxlength="50">
+                        </div>
+                        <div class="form-group">
+                            <label for="doc-content">Content</label>
+                            <textarea id="doc-content" placeholder="Paste your document content here..." rows="8"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label for="doc-tags">Tags (comma-separated)</label>
+                            <input type="text" id="doc-tags" placeholder="tag1, tag2, tag3">
+                        </div>
+                        <button id="upload-doc-btn" class="btn-primary">
+                            <i class="fas fa-upload"></i>
+                            Upload Document
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Documents List Section -->
+                <div class="section">
+                    <h3>Existing Documents</h3>
+                    <div class="documents-controls">
+                        <button id="refresh-docs-btn" class="btn-secondary">
+                            <i class="fas fa-refresh"></i>
+                            Refresh
+                        </button>
+                        <input type="text" id="search-docs" placeholder="Search documents..." style="margin-left: 10px;">
+                    </div>
+                    <div id="documents-list" class="documents-list">
+                        <div class="loading">Loading documents...</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- System Status Modal -->
+    <div id="status-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>System Status</h2>
+                <button id="close-status" class="btn-icon">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="system-metrics">
+                    <!-- Metrics will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loading-overlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p>Initializing AI Assistant...</p>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- Scripts -->
+    <script>
+        // Simple, working SAIA-RAG Web UI
+        class SAIAApp {
+            constructor() {
+                this.apiBaseUrl = '';
+                this.conversationId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+                this.isConnected = false;
+                this.isProcessing = false;
+                this.init();
+            }
+
+            async init() {
+                // Get DOM elements
+                this.elements = {
+                    connectionStatus: document.getElementById('connection-status'),
+                    statusText: document.getElementById('status-text'),
+                    messageInput: document.getElementById('message-input'),
+                    sendButton: document.getElementById('send-button'),
+                    chatMessages: document.getElementById('chat-messages'),
+                    charCount: document.getElementById('char-count'),
+                    // Document management elements
+                    documentsBtn: document.getElementById('documents-btn'),
+                    documentsModal: document.getElementById('documents-modal'),
+                    closeDocuments: document.getElementById('close-documents'),
+                    uploadDocBtn: document.getElementById('upload-doc-btn'),
+                    refreshDocsBtn: document.getElementById('refresh-docs-btn'),
+                    documentsList: document.getElementById('documents-list'),
+                    searchDocs: document.getElementById('search-docs'),
+                    docTitle: document.getElementById('doc-title'),
+                    docCategory: document.getElementById('doc-category'),
+                    docContent: document.getElementById('doc-content'),
+                    docTags: document.getElementById('doc-tags')
+                };
+
+                // Set up event listeners
+                this.setupEventListeners();
+
+                // Check system health
+                await this.checkHealth();
+            }
+
+            setupEventListeners() {
+                // Input handling
+                this.elements.messageInput.addEventListener('input', () => {
+                    const text = this.elements.messageInput.value.trim();
+                    const length = this.elements.messageInput.value.length;
+                    this.elements.charCount.textContent = `${length}/2000`;
+                    this.elements.sendButton.disabled = !text || this.isProcessing || !this.isConnected;
+                });
+
+                // Send button
+                this.elements.sendButton.addEventListener('click', () => this.sendMessage());
+
+                // Enter key
+                this.elements.messageInput.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!this.elements.sendButton.disabled) {
+                            this.sendMessage();
+                        }
+                    }
+                });
+
+                // Document management
+                this.elements.documentsBtn.addEventListener('click', () => this.openDocumentsModal());
+                this.elements.closeDocuments.addEventListener('click', () => this.closeDocumentsModal());
+                this.elements.uploadDocBtn.addEventListener('click', () => this.uploadDocument());
+                this.elements.refreshDocsBtn.addEventListener('click', () => this.loadDocuments());
+                this.elements.searchDocs.addEventListener('input', () => this.filterDocuments());
+
+                // Close modal on backdrop click
+                this.elements.documentsModal.addEventListener('click', (e) => {
+                    if (e.target === this.elements.documentsModal) {
+                        this.closeDocumentsModal();
+                    }
+                });
+            }
+
+            async checkHealth() {
+                try {
+                    const response = await fetch('/health');
+                    const data = await response.json();
+
+                    if (data.status === 'ok') {
+                        this.updateStatus('connected', 'Connected');
+                        this.isConnected = true;
+                        this.elements.sendButton.disabled = false;
+                    } else {
+                        this.updateStatus('error', 'Service degraded');
+                    }
+                } catch (error) {
+                    console.error('Health check failed:', error);
+                    this.updateStatus('error', 'Connection failed');
+                }
+            }
+
+            updateStatus(status, text) {
+                this.elements.connectionStatus.className = `status-dot status-${status}`;
+                this.elements.statusText.textContent = text;
+            }
+
+            async sendMessage() {
+                const messageText = this.elements.messageInput.value.trim();
+                if (!messageText || this.isProcessing) return;
+
+                try {
+                    this.isProcessing = true;
+                    this.elements.sendButton.disabled = true;
+
+                    // Add user message
+                    this.addMessage('user', messageText);
+
+                    // Clear input
+                    this.elements.messageInput.value = '';
+                    this.elements.charCount.textContent = '0/2000';
+
+                    // Send to API
+                    const response = await fetch('/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            message: messageText,
+                            conversation_id: this.conversationId
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        this.addMessage('ai', data.response, data);
+                    } else {
+                        this.addMessage('system', `Error: ${data.detail || 'Unknown error'}`, null, true);
+                    }
+
+                } catch (error) {
+                    console.error('Send message failed:', error);
+                    this.addMessage('system', `Error: ${error.message}`, null, true);
+                } finally {
+                    this.isProcessing = false;
+                    this.elements.sendButton.disabled = false;
+                    this.elements.messageInput.focus();
+                }
+            }
+
+            addMessage(type, text, data = null, isError = false) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${type}-message${isError ? ' error' : ''}`;
+
+                const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const senderName = type === 'user' ? 'You' : type === 'ai' ? 'AI Assistant' : 'System';
+                const icon = type === 'user' ? 'fa-user' : type === 'ai' ? 'fa-robot' : 'fa-info-circle';
+
+                let metaInfo = '';
+                if (data && type === 'ai') {
+                    const confidence = data.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A';
+                    const processingTime = data.processing_time_ms || 0;
+                    metaInfo = `
+                        <div class="message-footer">
+                            <div class="message-info">
+                                <span class="info-item">
+                                    <i class="fas fa-chart-line"></i>
+                                    Confidence: ${confidence}
+                                </span>
+                                <span class="info-item">
+                                    <i class="fas fa-clock"></i>
+                                    ${processingTime}ms
+                                </span>
+                            </div>
+                        </div>
+                    `;
+                }
+
+                messageDiv.innerHTML = `
+                    <div class="message-content">
+                        <div class="message-header">
+                            <i class="fas ${icon}"></i>
+                            <span class="sender">${senderName}</span>
+                            <span class="timestamp">${timestamp}</span>
+                        </div>
+                        <div class="message-text">${text}</div>
+                        ${metaInfo}
+                    </div>
+                `;
+
+                this.elements.chatMessages.appendChild(messageDiv);
+                this.elements.chatMessages.scrollTop = this.elements.chatMessages.scrollHeight;
+            }
+
+            // === DOCUMENT MANAGEMENT METHODS ===
+
+            openDocumentsModal() {
+                this.elements.documentsModal.classList.remove('hidden');
+                document.body.style.overflow = 'hidden';
+                this.loadDocuments();
+            }
+
+            closeDocumentsModal() {
+                this.elements.documentsModal.classList.add('hidden');
+                document.body.style.overflow = '';
+            }
+
+            async uploadDocument() {
+                const title = this.elements.docTitle.value.trim();
+                const category = this.elements.docCategory.value.trim();
+                const content = this.elements.docContent.value.trim();
+                const tagsStr = this.elements.docTags.value.trim();
+
+                if (!title || !content) {
+                    alert('Please provide at least a title and content for the document.');
+                    return;
+                }
+
+                const tags = tagsStr ? tagsStr.split(',').map(tag => tag.trim()).filter(tag => tag) : [];
+
+                try {
+                    this.elements.uploadDocBtn.disabled = true;
+                    this.elements.uploadDocBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Uploading...';
+
+                    const response = await fetch('/documents/upload-content', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            title: title,
+                            category: category || null,
+                            content: content,
+                            tags: tags,
+                            author: 'Web UI User'
+                        })
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        // Clear form
+                        this.elements.docTitle.value = '';
+                        this.elements.docCategory.value = '';
+                        this.elements.docContent.value = '';
+                        this.elements.docTags.value = '';
+
+                        // Refresh documents list
+                        this.loadDocuments();
+
+                        alert(`Document uploaded successfully! Created ${data.chunks_created} chunks.`);
+                    } else {
+                        alert(`Upload failed: ${data.detail || 'Unknown error'}`);
+                    }
+
+                } catch (error) {
+                    console.error('Upload failed:', error);
+                    alert(`Upload failed: ${error.message}`);
+                } finally {
+                    this.elements.uploadDocBtn.disabled = false;
+                    this.elements.uploadDocBtn.innerHTML = '<i class="fas fa-upload"></i> Upload Document';
+                }
+            }
+
+            async loadDocuments() {
+                try {
+                    this.elements.documentsList.innerHTML = '<div class="loading">Loading documents...</div>';
+
+                    const response = await fetch('/documents?limit=50');
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        this.displayDocuments(data.documents);
+                    } else {
+                        this.elements.documentsList.innerHTML = `<div class="loading">Error: ${data.detail || 'Failed to load documents'}</div>`;
+                    }
+
+                } catch (error) {
+                    console.error('Failed to load documents:', error);
+                    this.elements.documentsList.innerHTML = '<div class="loading">Error: Failed to load documents</div>';
+                }
+            }
+
+            displayDocuments(documents) {
+                if (!documents || documents.length === 0) {
+                    this.elements.documentsList.innerHTML = `
+                        <div class="empty-state">
+                            <i class="fas fa-folder-open"></i>
+                            <p>No documents found. Upload your first document to get started!</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                const documentsHtml = documents.map(doc => {
+                    const uploadDate = new Date(doc.upload_date).toLocaleDateString();
+                    const tags = doc.tags && doc.tags.length > 0 ? doc.tags.join(', ') : 'No tags';
+
+                    return `
+                        <div class="document-item" data-doc-id="${doc.document_id}">
+                            <div class="document-info">
+                                <div class="document-title">${doc.title || 'Untitled'}</div>
+                                <div class="document-meta">
+                                    <span><i class="fas fa-folder"></i> ${doc.category || 'Uncategorized'}</span>
+                                    <span><i class="fas fa-file-alt"></i> ${doc.chunk_count} chunks</span>
+                                    <span><i class="fas fa-calendar"></i> ${uploadDate}</span>
+                                    <span><i class="fas fa-tags"></i> ${tags}</span>
+                                </div>
+                            </div>
+                            <div class="document-actions">
+                                <button class="btn-danger" onclick="saiaApp.deleteDocument('${doc.document_id}', '${doc.title || 'Untitled'}')">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+                this.elements.documentsList.innerHTML = documentsHtml;
+            }
+
+            async deleteDocument(documentId, title) {
+                if (!confirm(`Are you sure you want to delete "${title}"? This action cannot be undone.`)) {
+                    return;
+                }
+
+                try {
+                    const response = await fetch(`/documents/${documentId}`, {
+                        method: 'DELETE'
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        alert(`Document "${title}" deleted successfully. Removed ${data.chunks_deleted} chunks.`);
+                        this.loadDocuments();
+                    } else {
+                        alert(`Delete failed: ${data.detail || 'Unknown error'}`);
+                    }
+
+                } catch (error) {
+                    console.error('Delete failed:', error);
+                    alert(`Delete failed: ${error.message}`);
+                }
+            }
+
+            filterDocuments() {
+                const searchTerm = this.elements.searchDocs.value.toLowerCase();
+                const documentItems = this.elements.documentsList.querySelectorAll('.document-item');
+
+                documentItems.forEach(item => {
+                    const title = item.querySelector('.document-title').textContent.toLowerCase();
+                    const meta = item.querySelector('.document-meta').textContent.toLowerCase();
+
+                    if (title.includes(searchTerm) || meta.includes(searchTerm)) {
+                        item.style.display = 'flex';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+        }
+
+        // Initialize when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            window.saiaApp = new SAIAApp();
+        });
+    </script>
+</body>
+</html>

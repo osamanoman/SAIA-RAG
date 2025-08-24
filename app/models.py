@@ -88,7 +88,7 @@ class DocumentMetadata(BaseModel):
 class DocumentUploadRequest(BaseModel):
     """Document upload request model."""
     metadata: DocumentMetadata = Field(default_factory=DocumentMetadata, description="Document metadata")
-    
+
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
@@ -99,6 +99,37 @@ class DocumentUploadRequest(BaseModel):
                     "author": "Support Team",
                     "source": "internal"
                 }
+            }
+        }
+    )
+
+
+class DocumentContentRequest(BaseModel):
+    """Document content upload request model."""
+    title: str = Field(..., min_length=1, max_length=200, description="Document title")
+    category: Optional[str] = Field(None, max_length=50, description="Document category")
+    content: str = Field(..., min_length=1, description="Document content")
+    tags: Optional[List[str]] = Field(default=[], description="Document tags")
+    author: Optional[str] = Field(None, max_length=100, description="Document author")
+
+    @field_validator("tags")
+    @classmethod
+    def validate_tags(cls, v: List[str]) -> List[str]:
+        """Validate tags list."""
+        if v is None:
+            return []
+        # Remove empty tags and limit to 10 tags
+        clean_tags = [tag.strip() for tag in v if tag.strip()]
+        return clean_tags[:10]
+
+    model_config = ConfigDict(
+        json_schema_extra={
+            "example": {
+                "title": "Password Reset Guide",
+                "category": "Support",
+                "content": "Step 1: Go to login page...",
+                "tags": ["password", "reset", "guide"],
+                "author": "Support Team"
             }
         }
     )
@@ -422,7 +453,7 @@ __all__ = [
     # Base models
     "BaseResponse", "ErrorDetail", "ErrorResponse",
     # Document models
-    "DocumentMetadata", "DocumentUploadRequest", "DocumentChunk",
+    "DocumentMetadata", "DocumentUploadRequest", "DocumentContentRequest", "DocumentChunk",
     "DocumentResponse", "DocumentListItem", "DocumentListResponse", "DocumentDeleteResponse",
     # Chat/RAG models
     "ChatRequest", "SourceDocument", "ChatResponse",

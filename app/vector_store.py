@@ -12,7 +12,7 @@ import uuid
 import hashlib
 from datetime import datetime
 
-from qdrant_client import QdrantClient
+from qdrant_client import QdrantClient, models
 from qdrant_client.models import (
     PointStruct,
     VectorParams,
@@ -112,12 +112,24 @@ class QdrantVectorStore:
                 logger.info("Collection already exists", collection_name=self.collection_name)
                 return True
             
-            # Create collection with mandatory configuration
+            # Create collection with standard HNSW configuration
             self.client.create_collection(
                 collection_name=self.collection_name,
                 vectors_config=VectorParams(
                     size=self.settings.embed_dim,
                     distance=Distance.COSINE  # IMMUTABLE per dev rules
+                ),
+                # Standard HNSW configuration for production use
+                hnsw_config=models.HnswConfigDiff(
+                    m=16,  # Standard number of connections per node
+                    ef_construct=100,  # Build-time search parameter
+                    full_scan_threshold=1000  # Use exact search for small collections
+                ),
+                # Standard optimizer configuration
+                optimizers_config=models.OptimizersConfigDiff(
+                    indexing_threshold=20000,  # Index when segment reaches threshold
+                    max_segment_size=200000,  # Maximum vectors per segment
+                    flush_interval_sec=5  # Flush interval in seconds
                 )
             )
             
@@ -162,7 +174,7 @@ class QdrantVectorStore:
             # Perform upsert operation
             operation_info = self.client.upsert(
                 collection_name=self.collection_name,
-                wait=wait,
+                wait=wait,  # Wait for completion based on parameter
                 points=points
             )
             
@@ -219,7 +231,7 @@ class QdrantVectorStore:
             # Ensure collection exists before searching
             self.ensure_collection_exists()
             
-            # Perform search operation
+            # Perform search operation using HNSW index
             search_results = self.client.search(
                 collection_name=self.collection_name,
                 query_vector=query_vector,
@@ -392,13 +404,16 @@ class QdrantVectorStore:
                     "indexed_at": datetime.utcnow().isoformat()
                 }
 
-                # Add any additional chunk metadata
-                if "title" in chunk:
-                    payload["title"] = chunk["title"]
-                if "category" in chunk:
-                    payload["category"] = chunk["category"]
-                if "tags" in chunk:
-                    payload["tags"] = chunk["tags"]
+                # Add document-level metadata to each chunk
+                chunk_metadata = chunk.get("metadata", {})
+                if "title" in chunk_metadata:
+                    payload["title"] = chunk_metadata["title"]
+                if "category" in chunk_metadata:
+                    payload["category"] = chunk_metadata["category"]
+                if "tags" in chunk_metadata:
+                    payload["tags"] = chunk_metadata["tags"]
+                if "author" in chunk_metadata:
+                    payload["author"] = chunk_metadata["author"]
 
                 points.append(PointStruct(
                     id=point_id,
@@ -408,6 +423,12 @@ class QdrantVectorStore:
 
             # Upsert all points
             result = self.upsert_points(points)
+
+            logger.info(
+                "Document chunks stored successfully",
+                collection_name=self.collection_name,
+                chunks_count=len(points)
+            )
 
             logger.info(
                 "Document chunks indexed successfully",
@@ -432,6 +453,8 @@ class QdrantVectorStore:
                 error=str(e)
             )
             raise
+
+
 
     def search_documents(
         self,
@@ -647,6 +670,61 @@ class QdrantVectorStore:
             logger.error(
                 "Failed to get document chunks",
                 document_id=document_id,
+                error=str(e)
+            )
+            raise
+
+    def list_documents(self) -> List[Dict[str, Any]]:
+        """
+        List all documents in the vector store with their metadata.
+
+        Returns:
+            List of document metadata dictionaries
+        """
+        try:
+            # Scroll through all points to get unique documents
+            scroll_result = self.client.scroll(
+                collection_name=self.collection_name,
+                limit=10000,  # Large limit to get all documents
+                with_payload=True,
+                with_vectors=False
+            )
+
+            # Group by document_id to get unique documents
+            documents_dict = {}
+            for point in scroll_result[0]:
+                if point.payload:
+                    doc_id = point.payload.get("document_id")
+                    if doc_id and doc_id not in documents_dict:
+                        documents_dict[doc_id] = {
+                            "document_id": doc_id,
+                            "title": point.payload.get("title"),
+                            "category": point.payload.get("category"),
+                            "tags": point.payload.get("tags", []),
+                            "author": point.payload.get("author") or point.payload.get("metadata", {}).get("author"),
+                            "upload_date": point.payload.get("indexed_at"),
+                            "chunk_count": 0
+                        }
+
+                    # Count chunks for this document
+                    if doc_id in documents_dict:
+                        documents_dict[doc_id]["chunk_count"] += 1
+
+            # Convert to list and sort by upload date (newest first)
+            documents = list(documents_dict.values())
+            documents.sort(key=lambda x: x.get("upload_date", ""), reverse=True)
+
+            logger.info(
+                "Documents listed",
+                total_documents=len(documents),
+                collection_name=self.collection_name
+            )
+
+            return documents
+
+        except Exception as e:
+            logger.error(
+                "Failed to list documents",
                 error=str(e)
             )
             raise

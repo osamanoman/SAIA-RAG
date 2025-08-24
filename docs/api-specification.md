@@ -131,14 +131,136 @@ All errors follow a consistent format with proper logging:
 - `GET /documents` - List uploaded documents
 - `DELETE /documents/{id}` - Delete document
 
-### **RAG Operations**
-- `POST /chat` - Submit query for RAG response
-- `POST /search` - Search document chunks
+### **✅ RAG Operations (Fully Implemented)**
 
-### **System Management**
-- `POST /escalate` - Escalate to human support
-- `POST /feedback` - Submit response feedback
-- `GET /admin/stats` - System statistics (admin only)
+#### **Chat with RAG**
+```http
+POST /chat
+```
+
+**Description**: Process chat query using RAG (Retrieval-Augmented Generation)
+
+**Authentication**: Required in production
+
+**Request**:
+```json
+{
+  "message": "What insurance services does Wazen provide?",
+  "conversation_id": "test-001"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "timestamp": "2025-08-24T09:20:30.753818",
+  "response": "Wazen provides comprehensive car insurance services in Saudi Arabia, which include:\n\n1. Vehicle protection\n2. Accident coverage\n3. Theft protection\n4. 24/7 customer support\n\nThey offer competitive rates and fast claim processing for all types of vehicles, including sedans, SUVs, and motorcycles. The coverage options include third-party liability, comprehensive coverage, and collision protection.",
+  "conversation_id": "test-001",
+  "confidence": 0.0,
+  "sources": [],
+  "processing_time_ms": 2109,
+  "tokens_used": 931
+}
+```
+
+#### **Search Documents**
+```http
+POST /search
+```
+
+**Description**: Search document chunks using vector similarity
+
+**Request**:
+```json
+{
+  "query": "car insurance coverage",
+  "limit": 5
+}
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "timestamp": "2025-08-24T09:21:59.967358",
+  "results": [
+    {
+      "chunk_id": "b33a72ac-734a-4a6e-8682-ca72fc48f084_chunk_0",
+      "document_id": "b33a72ac-734a-4a6e-8682-ca72fc48f084",
+      "title": "Wazen Insurance Services",
+      "content": "Wazen provides comprehensive car insurance services...",
+      "score": 0.43825454,
+      "metadata": {
+        "title": "Wazen Insurance Services",
+        "category": "insurance",
+        "tags": ["wazen", "insurance", "cars", "saudi arabia"],
+        "author": "Wazen Team"
+      }
+    }
+  ],
+  "total_results": 2,
+  "processing_time_ms": 707,
+  "query": "car insurance coverage"
+}
+```
+
+### **✅ System Management (Fully Implemented)**
+
+#### **Escalate to Human Support**
+```http
+POST /escalate
+```
+
+**Authentication**: Required in production
+
+**Request**:
+```json
+{
+  "conversation_id": "test-001",
+  "reason": "complex_technical_issue",
+  "user_message": "I need help with a complex insurance claim",
+  "context": "User needs specialized assistance"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "escalated",
+  "timestamp": "2025-08-24T09:23:35.019186",
+  "escalation_id": "3adff1b0-0cc4-4393-b542-930fafd8f488",
+  "ticket_number": "SAIA-3ADFF1B0",
+  "estimated_response_time": "1-2 business days"
+}
+```
+
+#### **Submit Feedback**
+```http
+POST /feedback
+```
+
+**Authentication**: Required in production
+
+**Request**:
+```json
+{
+  "conversation_id": "test-001",
+  "rating": 5,
+  "category": "helpfulness",
+  "comment": "Great response about insurance services!"
+}
+```
+
+**Response**:
+```json
+{
+  "status": "received",
+  "timestamp": "2025-08-24T09:24:42.950100",
+  "feedback_id": "5bfaa275-6758-44b5-b528-927ac7e80c7b",
+  "message": "Thank you for your positive feedback! We're glad we could help."
+}
+```
 
 ## 📝 **Interactive Documentation**
 

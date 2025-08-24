@@ -182,6 +182,71 @@ class Settings(BaseSettings):
         """Get the Qdrant collection name for this tenant."""
         return f"docs_{self.tenant_id}"
 
+    # === WHATSAPP BUSINESS API CONFIGURATION ===
+    whatsapp_access_token: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_ACCESS_TOKEN",
+        description="WhatsApp Business API access token"
+    )
+    whatsapp_phone_number_id: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_PHONE_NUMBER_ID",
+        description="WhatsApp Business phone number ID"
+    )
+    whatsapp_verify_token: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_VERIFY_TOKEN",
+        description="WhatsApp webhook verify token"
+    )
+
+    def is_whatsapp_configured(self) -> bool:
+        """Check if WhatsApp Business API is properly configured."""
+        return all([
+            self.whatsapp_access_token,
+            self.whatsapp_phone_number_id,
+            self.whatsapp_verify_token
+        ])
+
+    # === WHATSAPP BUSINESS API CONFIGURATION ===
+    whatsapp_access_token: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_ACCESS_TOKEN",
+        description="WhatsApp Business API access token"
+    )
+    whatsapp_phone_number_id: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_PHONE_NUMBER_ID",
+        description="WhatsApp Business phone number ID"
+    )
+    whatsapp_business_account_id: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_BUSINESS_ACCOUNT_ID",
+        description="WhatsApp Business account ID"
+    )
+    whatsapp_app_id: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_APP_ID",
+        description="WhatsApp App ID"
+    )
+    whatsapp_app_secret: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_APP_SECRET",
+        description="WhatsApp App secret"
+    )
+    whatsapp_verify_token: Optional[str] = Field(
+        default=None,
+        alias="WHATSAPP_VERIFY_TOKEN",
+        description="WhatsApp webhook verify token"
+    )
+
+    def is_whatsapp_configured(self) -> bool:
+        """Check if WhatsApp Business API is properly configured."""
+        return all([
+            self.whatsapp_access_token,
+            self.whatsapp_phone_number_id,
+            self.whatsapp_verify_token
+        ])
+
 
 @lru_cache()
 def get_settings() -> Settings:
