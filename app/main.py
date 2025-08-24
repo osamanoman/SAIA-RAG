@@ -714,7 +714,8 @@ async def chat(
             query=request.message,
             conversation_id=request.conversation_id,
             max_context_chunks=8,
-            confidence_threshold=settings.confidence_threshold
+            confidence_threshold=settings.confidence_threshold,
+            channel="chat"
         )
         logger.info("RAG response generated", result_keys=list(rag_result.keys()))
 
@@ -1644,7 +1645,8 @@ async def process_whatsapp_message_async(
             query=user_message,
             conversation_id=f"whatsapp_{user_phone}",
             max_context_chunks=5,  # Limit for faster WhatsApp responses
-            confidence_threshold=0.25  # Lower threshold for WhatsApp to get more matches
+            confidence_threshold=0.25,  # Lower threshold for WhatsApp to get more matches
+            channel="whatsapp"
         )
 
         # Send RAG response back via WhatsApp

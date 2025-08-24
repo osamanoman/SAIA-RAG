@@ -17,6 +17,9 @@ from .config import get_settings
 from .openai_client import get_openai_client
 from .vector_store import get_vector_store
 from .document_processor import get_document_processor
+from .query_processor import get_query_processor
+from .escalation import get_escalation_manager
+from .response_formatter import get_response_formatter
 from .models import SourceDocument
 
 # Get logger
@@ -40,6 +43,9 @@ class RAGService:
         self.openai_client = get_openai_client()
         self.vector_store = get_vector_store()
         self.document_processor = get_document_processor()
+        self.query_processor = get_query_processor()
+        self.escalation_manager = get_escalation_manager()
+        self.response_formatter = get_response_formatter()
 
         # Simple in-memory cache for frequent queries
         self._query_cache = {}
@@ -178,7 +184,8 @@ class RAGService:
         query: str,
         conversation_id: Optional[str] = None,
         max_context_chunks: int = 8,
-        confidence_threshold: Optional[float] = None
+        confidence_threshold: Optional[float] = None,
+        channel: str = "default"
     ) -> Dict[str, Any]:
         """
         Generate RAG response for a user query.
@@ -188,6 +195,7 @@ class RAGService:
             conversation_id: Optional conversation identifier
             max_context_chunks: Maximum chunks to use for context
             confidence_threshold: Minimum relevance score for chunks
+            channel: Channel type for preprocessing optimization
 
         Returns:
             Generated response with sources and metadata
@@ -196,16 +204,36 @@ class RAGService:
             start_time = datetime.utcnow()
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
 
-            # Check cache first
-            cache_key = self._get_cache_key(query, max_context_chunks, confidence_threshold)
+            # Step 1: Process and enhance query if enabled
+            if self.settings.enable_query_enhancement:
+                enhanced_query_result = await self.query_processor.process_query(
+                    query=query,
+                    channel=channel
+                )
+                processed_query = enhanced_query_result.enhanced_query
+                query_metadata = {
+                    "original_query": query,
+                    "enhanced_query": processed_query,
+                    "query_category": enhanced_query_result.query_type.category,
+                    "query_intent": enhanced_query_result.query_type.intent,
+                    "preprocessing_steps": enhanced_query_result.preprocessing_applied
+                }
+                logger.info("Query enhanced", **query_metadata)
+            else:
+                processed_query = query
+                query_metadata = {"original_query": query, "enhanced_query": query}
+
+            # Check cache with processed query
+            cache_key = self._get_cache_key(processed_query, max_context_chunks, confidence_threshold)
             cached_response = self._get_cached_response(cache_key)
             if cached_response:
-                # Update conversation_id and return cached response
+                # Update conversation_id and add query metadata
                 cached_response["conversation_id"] = conversation_id
+                cached_response.update(query_metadata)
                 return cached_response
-            
-            # Generate query embedding
-            query_embedding = await self.openai_client.generate_embedding(query)
+
+            # Generate query embedding using processed query
+            query_embedding = await self.openai_client.generate_embedding(processed_query)
             
             # Search for relevant chunks
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
@@ -247,38 +275,88 @@ class RAGService:
                 for i, chunk in enumerate(context_chunks)
             ])
             
-            # Create system prompt for RAG
-            system_prompt = self._build_system_prompt(context)
-            
-            # Generate response using OpenAI
+            # Create system prompt for RAG with query context
+            system_prompt = self._build_system_prompt(
+                context,
+                query_category=query_metadata.get("query_category", "general")
+            )
+
+            # Generate response using OpenAI with processed query
             messages = [
-                {"role": "user", "content": query}
+                {"role": "user", "content": processed_query}
             ]
-            
+
             chat_result = await self.openai_client.chat_completion(
                 messages=messages,
                 system_prompt=system_prompt,
                 temperature=0.7,
-                max_tokens=500
+                max_tokens=self.settings.max_response_tokens
             )
             
             # Calculate confidence based on source relevance
             avg_relevance = sum(s.relevance_score for s in sources) / len(sources) if sources else 0.0
             confidence = min(avg_relevance * 1.2, 1.0)  # Boost confidence slightly
-            
+
+            # Evaluate escalation conditions
+            escalation_result = self.escalation_manager.should_escalate(
+                confidence=confidence,
+                category=query_metadata.get("query_category", "general"),
+                channel=channel,
+                query_intent=query_metadata.get("query_intent", "question"),
+                sources_count=len(sources)
+            )
+
+            # Log escalation if triggered
+            if escalation_result.should_escalate:
+                self.escalation_manager.log_escalation(
+                    escalation_result,
+                    query,
+                    conversation_id
+                )
+
             end_time = datetime.utcnow()
             total_time_ms = int((end_time - start_time).total_seconds() * 1000)
             
+            # Get raw response content
+            raw_response = str(chat_result["content"]) if chat_result["content"] else "I apologize, but I couldn't generate a response."
+
+            # Apply response formatting for better customer experience
+            formatted_response = self.response_formatter.format_response(
+                content=raw_response,
+                category=query_metadata.get("query_category", "general"),
+                channel=channel,
+                confidence=confidence,
+                sources_count=len(sources),
+                query_intent=query_metadata.get("query_intent", "question")
+            )
+
+            final_response = formatted_response.content
+
+            # Handle escalation response
+            if escalation_result.should_escalate:
+                # Modify response to include escalation message
+                escalation_message = self.escalation_manager.format_escalation_for_channel(
+                    escalation_result, channel, include_options=True
+                )
+                if escalation_message:
+                    final_response = f"{final_response}\n\n{escalation_message}"
+
             # Validate and create result with proper types
             result = {
-                "response": str(chat_result["content"]) if chat_result["content"] else "I apologize, but I couldn't generate a response.",
+                "response": final_response,
                 "confidence": float(confidence),
                 "sources": sources,  # List of SourceDocument objects
                 "sources_count": int(len(sources)),
                 "conversation_id": conversation_id,
                 "processing_time_ms": int(total_time_ms),
                 "tokens_used": int(chat_result.get("tokens_used", 0)),
-                "model_used": str(chat_result.get("model", "unknown"))
+                "model_used": str(chat_result.get("model", "unknown")),
+                "escalation_suggested": escalation_result.should_escalate,
+                "escalation_reason": escalation_result.reason.type.value if escalation_result.reason else None,
+                "response_tone": formatted_response.tone.value,
+                "response_format": formatted_response.format_type.value,
+                "channel_optimized": formatted_response.channel_optimized,
+                **query_metadata  # Include query processing metadata
             }
 
             logger.info("RAG result created",
@@ -322,28 +400,66 @@ class RAGService:
                 "error": str(e)
             }
     
-    def _build_system_prompt(self, context: str) -> str:
+    def _build_system_prompt(self, context: str, query_category: str = "general") -> str:
         """
         Build system prompt for RAG response generation.
-        
+
         Args:
             context: Retrieved context from vector search
-            
+            query_category: Category of the query for specialized instructions
+
         Returns:
             System prompt string
         """
+        # Category-specific instructions
+        category_instructions = {
+            "troubleshooting": """
+- Provide clear, step-by-step troubleshooting instructions
+- Ask clarifying questions if the issue isn't clear
+- Suggest checking common causes first
+- If the issue persists, recommend escalation to technical support""",
+            "billing": """
+- Be precise about billing information and policies
+- Explain charges clearly and provide context
+- Direct to appropriate billing support if needed
+- Handle sensitive financial information with care""",
+            "setup": """
+- Provide clear, sequential setup instructions
+- Break down complex processes into simple steps
+- Mention prerequisites and requirements
+- Offer to help with next steps after setup""",
+            "policies": """
+- Quote policies accurately from the provided context
+- Explain policy implications clearly
+- Direct to full policy documents when appropriate
+- Be clear about what is and isn't covered""",
+            "general": """
+- Provide helpful, comprehensive answers
+- Be ready to assist with various types of questions
+- Offer additional help or resources when appropriate"""
+        }
+
+        specific_instructions = category_instructions.get(query_category, category_instructions["general"])
+
         return f"""You are SAIA, a helpful AI assistant for customer support. Your role is to provide accurate, helpful responses based on the provided context.
 
 CONTEXT INFORMATION:
 {context}
 
-INSTRUCTIONS:
+QUERY CATEGORY: {query_category.title()}
+
+GENERAL INSTRUCTIONS:
 1. Answer the user's question using ONLY the information provided in the context above
 2. If the context doesn't contain enough information to answer the question, say so clearly
 3. Be concise but comprehensive in your response
 4. If you reference specific information, you can mention it comes from the provided sources
 5. Maintain a helpful, professional tone
 6. If the user asks about something not covered in the context, politely explain that you don't have that information available
+
+CATEGORY-SPECIFIC GUIDANCE:
+{specific_instructions}
+
+ESCALATION: If confidence is low or the question requires human expertise, suggest: "I'd be happy to connect you with a specialist who can provide more detailed assistance."
 
 Remember: Only use the context provided above to answer questions. Do not use external knowledge beyond what's given in the context."""
     

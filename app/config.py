@@ -78,7 +78,7 @@ class Settings(BaseSettings):
     
     # === RAG CONFIGURATION ===
     confidence_threshold: float = Field(
-        default=0.35,
+        default=0.25,  # Lowered for better customer support coverage
         alias="CONFIDENCE_THRESHOLD",
         description="Minimum confidence threshold for RAG responses"
     )
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
         description="Maximum number of search results to retrieve"
     )
     chunk_size: int = Field(
-        default=1000,
+        default=800,  # Optimized for customer support content
         alias="CHUNK_SIZE",
         description="Document chunk size for processing"
     )
@@ -96,6 +96,38 @@ class Settings(BaseSettings):
         default=200,
         alias="CHUNK_OVERLAP",
         description="Overlap between document chunks"
+    )
+
+    # === CUSTOMER SUPPORT SPECIFIC CONFIGURATION ===
+    escalation_threshold: float = Field(
+        default=0.40,
+        alias="ESCALATION_THRESHOLD",
+        description="Confidence threshold below which to suggest human escalation"
+    )
+    whatsapp_confidence_threshold: float = Field(
+        default=0.20,
+        alias="WHATSAPP_CONFIDENCE_THRESHOLD",
+        description="Lower confidence threshold for WhatsApp responses"
+    )
+    max_response_tokens: int = Field(
+        default=300,
+        alias="MAX_RESPONSE_TOKENS",
+        description="Maximum tokens for generated responses"
+    )
+    enable_query_enhancement: bool = Field(
+        default=True,
+        alias="ENABLE_QUERY_ENHANCEMENT",
+        description="Enable query preprocessing and enhancement"
+    )
+    enable_conversation_memory: bool = Field(
+        default=True,
+        alias="ENABLE_CONVERSATION_MEMORY",
+        description="Enable conversation context memory for multi-turn interactions"
+    )
+    support_categories: list[str] = Field(
+        default=["troubleshooting", "billing", "setup", "general", "policies"],
+        alias="SUPPORT_CATEGORIES",
+        description="Customer support content categories for routing"
     )
     
     # === API CONFIGURATION ===
@@ -150,6 +182,30 @@ class Settings(BaseSettings):
         if not 0.0 <= v <= 1.0:
             raise ValueError("Confidence threshold must be between 0.0 and 1.0")
         return v
+
+    @field_validator("escalation_threshold")
+    @classmethod
+    def validate_escalation_threshold(cls, v: float) -> float:
+        """Validate escalation threshold range."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("Escalation threshold must be between 0.0 and 1.0")
+        return v
+
+    @field_validator("whatsapp_confidence_threshold")
+    @classmethod
+    def validate_whatsapp_confidence_threshold(cls, v: float) -> float:
+        """Validate WhatsApp confidence threshold range."""
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("WhatsApp confidence threshold must be between 0.0 and 1.0")
+        return v
+
+    @field_validator("max_response_tokens")
+    @classmethod
+    def validate_max_response_tokens(cls, v: int) -> int:
+        """Validate maximum response tokens."""
+        if v < 50 or v > 2000:
+            raise ValueError("Max response tokens must be between 50 and 2000")
+        return v
     
     @field_validator("embed_dim")
     @classmethod
@@ -190,6 +246,20 @@ class Settings(BaseSettings):
     def get_webhook_url(self) -> str:
         """Get the full WhatsApp webhook URL."""
         return f"{self.base_url.rstrip('/')}/whatsapp/webhook"
+
+    def should_escalate(self, confidence: float) -> bool:
+        """Check if response should be escalated to human based on confidence."""
+        return confidence < self.escalation_threshold
+
+    def get_confidence_threshold_for_channel(self, channel: str = "default") -> float:
+        """Get appropriate confidence threshold based on channel."""
+        if channel.lower() == "whatsapp":
+            return self.whatsapp_confidence_threshold
+        return self.confidence_threshold
+
+    def is_support_category_valid(self, category: str) -> bool:
+        """Check if a support category is valid."""
+        return category.lower() in [cat.lower() for cat in self.support_categories]
 
     # === WHATSAPP BUSINESS API CONFIGURATION ===
     whatsapp_access_token: Optional[str] = Field(
