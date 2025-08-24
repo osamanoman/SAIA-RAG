@@ -104,6 +104,11 @@ class Settings(BaseSettings):
         alias="API_KEY",
         description="API key for authentication (optional in development)"
     )
+    base_url: str = Field(
+        default="http://localhost:8000",
+        alias="BASE_URL",
+        description="Base URL for the application (used for webhooks and external references)"
+    )
     cors_origins: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080"],
         alias="CORS_ORIGINS",
@@ -181,6 +186,10 @@ class Settings(BaseSettings):
     def get_collection_name(self) -> str:
         """Get the Qdrant collection name for this tenant."""
         return f"docs_{self.tenant_id}"
+
+    def get_webhook_url(self) -> str:
+        """Get the full WhatsApp webhook URL."""
+        return f"{self.base_url.rstrip('/')}/whatsapp/webhook"
 
     # === WHATSAPP BUSINESS API CONFIGURATION ===
     whatsapp_access_token: Optional[str] = Field(

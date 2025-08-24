@@ -1672,7 +1672,7 @@ async def whatsapp_status(settings: Settings = Depends(get_settings)):
             "configured": True,
             "health": health_status,
             "phone_number_id": settings.whatsapp_phone_number_id,
-            "webhook_url": "/whatsapp/webhook"
+            "webhook_url": settings.get_webhook_url()
         }
 
     except Exception as e:
