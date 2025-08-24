@@ -338,9 +338,9 @@ class RAGService:
 
             final_response = formatted_response.content
 
-            # Handle escalation response
-            if escalation_result.should_escalate:
-                # Modify response to include escalation message
+            # Handle escalation response - only for very low confidence
+            if escalation_result.should_escalate and confidence < 0.05:
+                # Only escalate for extremely low confidence
                 escalation_message = self.escalation_manager.format_escalation_for_channel(
                     escalation_result, channel, include_options=True, original_query=query
                 )
@@ -509,22 +509,23 @@ class RAGService:
 فئة الاستفسار: {query_category}
 
 التعليمات المهمة جداً:
-1. أجب على سؤال المستخدم باستخدام المعلومات المتوفرة في السياق أعلاه فقط
-2. إذا لم يحتوي السياق على معلومات كافية للإجابة، اذكر ذلك بوضوح
-3. كن مختصراً ولكن شاملاً في إجابتك
-4. حافظ على نبرة مهذبة ومهنية
-5. إذا سأل المستخدم عن شيء غير مغطى في السياق، اشرح بأدب أن هذه المعلومات غير متوفرة
+1. أجب على سؤال المستخدم بطريقة مفيدة ومهذبة
+2. إذا كان لديك معلومات في السياق، استخدمها للإجابة
+3. إذا لم يحتوي السياق على معلومات كافية، قدم إجابة عامة مفيدة بناءً على معرفتك
+4. كن مختصراً ولكن شاملاً في إجابتك
+5. حافظ على نبرة مهذبة ومهنية
 6. أجب باللغة العربية فقط - لا تستخدم أي كلمات إنجليزية أبداً
-7. لا تضع أي عبارات إنجليزية في نهاية الإجابة مثل "Is there anything else I can help you with?"
-8. لا تسأل إذا كان هناك شيء آخر يمكنك مساعدة المستخدم به - فقط أجب على السؤال المطروح
+7. لا تضع أي عبارات إنجليزية في نهاية الإجابة
+8. كن مساعداً وودوداً في إجاباتك
 9. انهِ إجابتك بنقطة (.) ولا تضف أي نص إضافي
+10. لا تقل "I understand your concern" أو أي عبارة إنجليزية
 
 إرشادات خاصة بالفئة:
 {specific_instructions}
 
 مهم جداً: أجب باللغة العربية فقط. لا تضع أي نص إنجليزي في أي جزء من الإجابة.
 
-تذكر: استخدم فقط السياق المقدم أعلاه للإجابة على الأسئلة. لا تستخدم معرفة خارجية تتجاوز ما هو مقدم في السياق. أجب باللغة العربية فقط."""
+تذكر: كن مساعداً ومفيداً. إذا كان السياق يحتوي على معلومات مفيدة، استخدمها. إذا لم يكن كذلك، قدم إجابة عامة مفيدة. أجب باللغة العربية فقط."""
         else:
             return f"""You are SAIA, a helpful AI assistant for customer support. Your role is to provide accurate, helpful responses in English only based on the provided context.
 

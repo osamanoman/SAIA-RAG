@@ -170,12 +170,12 @@ class EscalationManager:
     ) -> Optional[EscalationReason]:
         """Evaluate conditions that might trigger escalation."""
         
-        # Primary condition: Low confidence
-        if confidence < threshold:
+        # Primary condition: Very low confidence (be less aggressive)
+        if confidence < 0.1:  # Only escalate for extremely low confidence
             escalation_type = EscalationType.LOW_CONFIDENCE
-            description = f"Response confidence ({confidence:.2f}) below threshold ({threshold:.2f})"
-            suggested_action = "Connect with specialist for accurate assistance"
-            
+            description = f"Response confidence ({confidence:.2f}) extremely low"
+            suggested_action = "Consider connecting with specialist if needed"
+
             return EscalationReason(
                 type=escalation_type,
                 confidence=confidence,
