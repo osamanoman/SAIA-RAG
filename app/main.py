@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, List
 import time
 import asyncio
 
-from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request
+from fastapi import FastAPI, HTTPException, Depends, Header, Query, Request, BackgroundTasks
 from fastapi.responses import HTMLResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import structlog
@@ -1550,6 +1550,7 @@ async def whatsapp_webhook_verify(
 @app.post("/whatsapp/webhook")
 async def whatsapp_webhook_receive(
     request: Request,
+    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings)
 ):
     """
@@ -1583,17 +1584,27 @@ async def whatsapp_webhook_receive(
         whatsapp_client = get_whatsapp_client()
         message_data = whatsapp_client.parse_webhook_message(request_data)
 
+        logger.info("WhatsApp message parsing result",
+                   message_data_exists=message_data is not None,
+                   message_data_keys=list(message_data.keys()) if message_data else None)
+
         if not message_data:
             # Not a text message, status update, or parsing failed
+            logger.info("WhatsApp message ignored - no valid message data")
             return JSONResponse(content={"status": "ignored"})
 
         # Step 3: Schedule async processing (don't wait for it)
-        asyncio.create_task(
-            process_whatsapp_message_async(
-                message_data=message_data,
-                settings=settings
-            )
+        logger.info("Scheduling WhatsApp background task",
+                   from_number=message_data.get("from"),
+                   message_preview=message_data.get("text", "")[:50])
+
+        background_tasks.add_task(
+            process_whatsapp_message_async,
+            message_data=message_data,
+            settings=settings
         )
+
+        logger.info("WhatsApp background task scheduled successfully")
 
         # Step 4: Return immediate success (as required by Meta)
         return JSONResponse(content={"status": "received"})
@@ -1618,6 +1629,7 @@ async def process_whatsapp_message_async(
         message_data: Parsed message data from WhatsApp
         settings: Application settings
     """
+    logger.info("WhatsApp async processing started", message_data_keys=list(message_data.keys()))
     try:
         # Extract message details
         user_phone = message_data["from"]
@@ -1628,11 +1640,20 @@ async def process_whatsapp_message_async(
             "Processing WhatsApp message asynchronously",
             from_number=user_phone,
             message_id=message_id,
-            message_length=len(user_message)
+            message_length=len(user_message),
+            message_text=user_message[:100]  # Log first 100 chars for debugging
         )
 
         # Process message through RAG system (same as web UI)
         rag_service = get_rag_service()
+        logger.info(
+            "WhatsApp RAG processing started",
+            query=user_message,
+            conversation_id=f"whatsapp_{user_phone}",
+            max_context_chunks=8,
+            confidence_threshold=settings.confidence_threshold
+        )
+
         rag_response = await rag_service.generate_response(
             query=user_message,
             conversation_id=f"whatsapp_{user_phone}",
@@ -1641,12 +1662,33 @@ async def process_whatsapp_message_async(
             channel="chat"  # Use same channel as web UI for consistent processing
         )
 
+        logger.info(
+            "WhatsApp RAG processing completed",
+            response_length=len(rag_response.get("response", "")),
+            confidence=rag_response.get("confidence", 0),
+            sources_count=len(rag_response.get("sources", [])),
+            response_preview=rag_response.get("response", "")[:100]
+        )
+
         # Send RAG response back via WhatsApp
         whatsapp_client = get_whatsapp_client()
+        logger.info(
+            "Sending WhatsApp response",
+            to=user_phone,
+            response_to_send=rag_response.get("response", "")[:100]
+        )
+
         send_result = await whatsapp_client.send_rag_response(
             to=user_phone,
             rag_response=rag_response,
             include_sources=False  # Keep WhatsApp messages clean and concise
+        )
+
+        logger.info(
+            "WhatsApp response sent",
+            to=user_phone,
+            send_success=send_result.get("success", False),
+            message_id=send_result.get("message_id", "unknown")
         )
 
         logger.info(
