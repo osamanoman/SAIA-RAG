@@ -244,12 +244,8 @@ class QueryProcessor:
     
     def _apply_channel_preprocessing(self, query: str, channel: str) -> str:
         """Apply channel-specific preprocessing."""
-        if channel.lower() == "whatsapp":
-            # WhatsApp users often use informal language
-            # Add context for better understanding
-            if len(query) < 20:  # Very short queries
-                return f"Customer support question: {query}"
-        
+        # Removed WhatsApp-specific preprocessing to ensure consistent responses
+        # across all channels (WhatsApp, web UI, etc.)
         return query
     
     async def _enhance_for_support(self, query: str, query_type: QueryType) -> str:

@@ -1631,14 +1631,14 @@ async def process_whatsapp_message_async(
             message_length=len(user_message)
         )
 
-        # Process message through RAG system
+        # Process message through RAG system (same as web UI)
         rag_service = get_rag_service()
         rag_response = await rag_service.generate_response(
             query=user_message,
             conversation_id=f"whatsapp_{user_phone}",
-            max_context_chunks=5,  # Limit for faster WhatsApp responses
-            confidence_threshold=0.25,  # Lower threshold for WhatsApp to get more matches
-            channel="whatsapp"
+            max_context_chunks=8,  # Same as web UI for consistent responses
+            confidence_threshold=settings.confidence_threshold,  # Use same threshold as web UI
+            channel="chat"  # Use same channel as web UI for consistent processing
         )
 
         # Send RAG response back via WhatsApp
