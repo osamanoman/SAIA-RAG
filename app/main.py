@@ -29,7 +29,6 @@ FeedbackRequest, FeedbackResponse, AdminStatsResponse, AdminHealthResponse,
 AdminConfigResponse, AdminLogsResponse, SystemStats, VectorStoreStats,
 SystemHealthDetail, SystemConfigItem, LogEntry
 )
-
 # Configure structured logging with proper keyword argument handling
 structlog.configure(
     processors=[
@@ -64,7 +63,7 @@ def create_application() -> FastAPI:
     # Configure app based on environment
     app_config = {
         "title": settings.app_name,
-        "description": "RAG-based customer support chatbot with smart fallbacks",
+        "description": "Wazen AI Assistant - Insurance services support powered by RAG",
         "version": settings.app_version,
     }
 
@@ -78,7 +77,7 @@ def create_application() -> FastAPI:
 
     app = FastAPI(**app_config)
 
-    # Mount static files for web UI
+    # Mount static files for web UI with cache control
     app.mount("/static", StaticFiles(directory="static"), name="static")
 
     # Setup middleware in correct order
@@ -155,6 +154,31 @@ async def startup_event():
         tenant_id=settings.tenant_id,
         version=settings.app_version
     )
+    
+    # Validate WhatsApp configuration at startup
+    if settings.is_whatsapp_configured():
+        logger.info("WhatsApp integration configured and ready")
+        try:
+            whatsapp_client = get_whatsapp_client()
+            health_status = await whatsapp_client.health_check()
+            if health_status["status"] == "healthy":
+                logger.info("WhatsApp API connectivity verified")
+            else:
+                logger.warning("WhatsApp API connectivity issues", health_status=health_status)
+        except Exception as e:
+            logger.error("WhatsApp startup validation failed", error=str(e))
+    else:
+        logger.warning("WhatsApp integration not configured - webhook endpoints will return 503")
+        # Log missing configuration details
+        missing_fields = []
+        if not settings.whatsapp_access_token:
+            missing_fields.append("WHATSAPP_ACCESS_TOKEN")
+        if not settings.whatsapp_phone_number_id:
+            missing_fields.append("WHATSAPP_PHONE_NUMBER_ID")
+        if not settings.whatsapp_verify_token:
+            missing_fields.append("WHATSAPP_VERIFY_TOKEN")
+        
+        logger.warning("Missing WhatsApp configuration fields", missing_fields=missing_fields)
 
 
 @app.on_event("shutdown")
@@ -297,7 +321,7 @@ async def root(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
 @app.get("/ui", response_class=HTMLResponse)
 async def web_ui():
     """
-    Serve the web UI for SAIA-RAG chat interface.
+    Serve the web UI for Wazen AI Assistant chat interface.
 
     Returns:
         HTML response with the chat interface
@@ -669,6 +693,71 @@ async def delete_document(
 
 # === RAG QUERY ENDPOINTS ===
 
+async def process_chat_request_whatsapp(
+    query: str,
+    conversation_id: Optional[str] = None,
+    settings: Settings = None
+) -> Dict[str, Any]:
+    """
+    WhatsApp-specific RAG processing pipeline with proper formatting and cleaning.
+
+    This function handles the complete RAG flow for WhatsApp:
+    1. Converts query to embeddings
+    2. Searches vector store for relevant chunks
+    3. Builds context from retrieved chunks
+    4. Generates response using OpenAI Chat API with context
+    5. Applies WhatsApp-specific formatting and aggressive cleaning
+    6. Returns clean response without unwanted text
+
+    Args:
+        query: User's chat message or search query
+        conversation_id: Optional identifier for context tracking
+        settings: Application settings
+
+    Returns:
+        Dictionary containing clean response, confidence, sources, and metadata
+    """
+    if settings is None:
+        settings = get_settings()
+        
+    logger.info("Starting WhatsApp RAG processing pipeline", query=query, conversation_id=conversation_id)
+
+    try:
+        # Get RAG service
+        rag_service = get_rag_service()
+
+        # Use WhatsApp channel for proper formatting and cleaning
+        rag_result = await rag_service.generate_response(
+            query=query,
+            conversation_id=conversation_id,
+            max_context_chunks=8,
+            confidence_threshold=settings.confidence_threshold,
+            channel="whatsapp"  # WhatsApp channel for proper formatting and cleaning
+        )
+
+        return rag_result
+
+    except Exception as e:
+        logger.error(
+            "WhatsApp RAG processing failed",
+            query=query,
+            conversation_id=conversation_id,
+            error=str(e),
+            error_type=type(e).__name__
+        )
+        
+        # Return a clean error response for WhatsApp
+        return {
+            "response": "عذراً، حدث خطأ في معالجة رسالتك. يرجى المحاولة مرة أخرى.",
+            "confidence": 0.0,
+            "sources": [],
+            "error": str(e)
+        }
+
+
+# DUPLICATE FUNCTION REMOVED - Using only process_chat_request_whatsapp for consistency
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
@@ -703,14 +792,12 @@ async def chat(
         rag_service = get_rag_service()
         logger.info("RAG service obtained")
 
-        # Generate RAG response
+        # Generate RAG response using WhatsApp processing path for consistency
         logger.info("Starting RAG response generation")
-        rag_result = await rag_service.generate_response(
+        rag_result = await process_chat_request_whatsapp(
             query=request.message,
             conversation_id=request.conversation_id,
-            max_context_chunks=8,
-            confidence_threshold=settings.confidence_threshold,
-            channel="chat"
+            settings=settings
         )
         logger.info("RAG response generated", result_keys=list(rag_result.keys()))
 
@@ -760,14 +847,10 @@ async def chat(
             traceback=str(e.__traceback__)
         )
 
-        # Return a proper error response instead of raising HTTPException
-        return ChatResponse(
-            response="I apologize, but I'm experiencing technical difficulties. Please try again later.",
-            conversation_id=request.conversation_id,
-            confidence=0.0,
-            sources=[],
-            processing_time_ms=0,
-            tokens_used=0
+        # Re-raise the exception instead of returning fallback response
+        raise HTTPException(
+            status_code=500,
+            detail=f"Chat processing failed: {str(e)}"
         )
 
 
@@ -1487,7 +1570,7 @@ async def get_system_metrics(
 
 # === WHATSAPP BUSINESS API ENDPOINTS ===
 
-@app.get("/whatsapp/webhook")
+@app.get("/whatsapp/verify")
 async def whatsapp_webhook_verify(
     hub_mode: str = Query(None, alias="hub.mode"),
     hub_verify_token: str = Query(None, alias="hub.verify_token"),
@@ -1547,66 +1630,276 @@ async def whatsapp_webhook_verify(
         )
 
 
+@app.post("/whatsapp/test")
+async def whatsapp_test_endpoint():
+    """Simple test endpoint to verify routing works."""
+    print("🔥 TEST ENDPOINT CALLED!")
+    return {"status": "test_endpoint_working"}
+
+
+@app.post("/whatsapp/simulate")
+async def whatsapp_simulate_webhook(
+    request: Request,
+    settings: Settings = Depends(get_settings)
+):
+    """
+    Simulate WhatsApp webhook for testing purposes.
+    
+    This endpoint allows you to test the WhatsApp processing pipeline
+    without needing actual WhatsApp webhook calls.
+    
+    Expected payload format:
+    {
+        "object": "whatsapp_business_account",
+        "entry": [{
+            "id": "test_id",
+            "changes": [{
+                "value": {
+                    "messaging_product": "whatsapp",
+                    "metadata": {
+                        "display_phone_number": "+1234567890",
+                        "phone_number_id": "test_phone_id"
+                    },
+                    "messages": [{
+                        "from": "1234567890",
+                        "id": "test_message_id",
+                        "timestamp": "1234567890",
+                        "text": {
+                            "body": "test message"
+                        },
+                        "type": "text"
+                    }]
+                },
+                "field": "messages"
+            }]
+        }]
+    }
+    """
+    try:
+        if not settings.is_whatsapp_configured():
+            return JSONResponse(
+                status_code=503,
+                content={"status": "not_configured", "message": "WhatsApp not configured"}
+            )
+        
+        # Parse the test payload
+        test_data = await request.json()
+        logger.info("WhatsApp simulation received", test_data=test_data)
+        
+        # Use the same parsing logic as the real webhook
+        whatsapp_client = get_whatsapp_client()
+        message_data = whatsapp_client.parse_webhook_message(test_data)
+        
+        if not message_data:
+            return JSONResponse(
+                status_code=400,
+                content={"status": "invalid_payload", "message": "Failed to parse test payload"}
+            )
+        
+        # Process the message synchronously for testing
+        logger.info("Processing simulated WhatsApp message", message_data=message_data)
+        
+        # Use WhatsApp channel for simulation to get proper formatting and cleaning
+        rag_response = await process_chat_request_whatsapp(
+            query=message_data["text"],
+            conversation_id=f"simulation_{message_data['from']}",
+            settings=settings
+        )
+        
+        logger.info("Simulation completed successfully", rag_response=rag_response)
+        
+        return JSONResponse(content={
+            "status": "success",
+            "message": "WhatsApp simulation completed",
+            "parsed_message": message_data,
+            "rag_response": rag_response
+        })
+        
+    except Exception as e:
+        logger.error("WhatsApp simulation failed", error=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Simulation failed: {str(e)}"}
+        )
+
+
+@app.get("/whatsapp/debug")
+async def whatsapp_debug_info(settings: Settings = Depends(get_settings)):
+    """
+    Get detailed WhatsApp debug information.
+    
+    This endpoint provides comprehensive debugging information
+    about the WhatsApp integration status and configuration.
+    """
+    try:
+        debug_info = {
+            "configuration": {
+                "is_configured": settings.is_whatsapp_configured(),
+                "has_access_token": bool(settings.whatsapp_access_token),
+                "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
+                "has_verify_token": bool(settings.whatsapp_verify_token),
+                "has_business_account_id": bool(settings.whatsapp_business_account_id),
+                "has_app_id": bool(settings.whatsapp_app_id),
+                "has_app_secret": bool(settings.whatsapp_app_secret)
+            },
+            "endpoints": {
+                "verification": "/whatsapp/verify",
+                "webhook": "/whatsapp/webhook",
+                "status": "/whatsapp/status",
+                "test": "/whatsapp/test",
+                "simulate": "/whatsapp/simulate",
+                "debug": "/whatsapp/debug"
+            },
+            "webhook_url": settings.get_webhook_url(),
+            "environment": settings.environment
+        }
+        
+        # Add health check if configured
+        if settings.is_whatsapp_configured():
+            try:
+                whatsapp_client = get_whatsapp_client()
+                health_status = await whatsapp_client.health_check()
+                debug_info["health"] = health_status
+            except Exception as e:
+                debug_info["health"] = {"error": str(e)}
+        
+        return JSONResponse(content=debug_info)
+        
+    except Exception as e:
+        logger.error("WhatsApp debug info failed", error=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Debug info failed: {str(e)}"}
+        )
+
+
 @app.post("/whatsapp/webhook")
 async def whatsapp_webhook_receive(
     request: Request,
-    background_tasks: BackgroundTasks,
     settings: Settings = Depends(get_settings)
 ):
     """
     WhatsApp webhook message receiver endpoint.
 
     Following Meta's best practices:
-    - Responds with 200 OK within 80ms
-    - Processes business logic asynchronously
-    - Uses background tasks for RAG processing
+    - Responds with 200 OK quickly (typically < 500ms)
+    - Processes messages synchronously for reliability
+    - Uses the same RAG pipeline as the web UI
 
     Args:
         request: FastAPI request object
         settings: Application settings
 
     Returns:
-        Immediate 200 OK response
+        200 OK response after processing and sending reply
     """
+    # CRITICAL DEBUG: Print to stdout to bypass logging issues
+    print("🔥 WHATSAPP WEBHOOK FUNCTION ENTERED!")
+
     try:
-        # Step 1: Respond immediately (within 80ms as per Meta requirements)
+        # Step 1: Check WhatsApp configuration
+        print("🔥 CHECKING WHATSAPP CONFIGURATION...")
         if not settings.is_whatsapp_configured():
+            print("🔥 WHATSAPP NOT CONFIGURED!")
             logger.warning("WhatsApp webhook received but not configured")
             return JSONResponse(content={"status": "not_configured"})
 
-        # Parse request body quickly
-        request_data = await request.json()
+        # Step 2: Parse request body
+        print("🔥 PARSING REQUEST BODY...")
+        try:
+            request_data = await request.json()
+            print(f"🔥 REQUEST DATA PARSED SUCCESSFULLY")
+        except Exception as e:
+            print(f"🔥 FAILED TO PARSE REQUEST BODY: {str(e)}")
+            logger.error("Failed to parse webhook request body", error=str(e))
+            return JSONResponse(content={"status": "invalid_request"})
 
+        # Step 3: Log raw webhook data
         logger.info("WhatsApp webhook received",
-                   entry_count=len(request_data.get("entry", [])))
+                   entry_count=len(request_data.get("entry", [])),
+                   raw_data_keys=list(request_data.keys()),
+                   webhook_data_type=type(request_data).__name__)
 
-        # Step 2: Quick validation and immediate response
+        # Step 4: Parse WhatsApp message
+        print("🔥 PARSING WHATSAPP MESSAGE...")
         whatsapp_client = get_whatsapp_client()
+        logger.info("Parsing WhatsApp webhook message")
+        
         message_data = whatsapp_client.parse_webhook_message(request_data)
-
+        print(f"🔥 MESSAGE DATA RESULT: {message_data}")
+        
         logger.info("WhatsApp message parsing result",
                    message_data_exists=message_data is not None,
                    message_data_keys=list(message_data.keys()) if message_data else None)
 
         if not message_data:
             # Not a text message, status update, or parsing failed
+            print("🔥 MESSAGE DATA IS NONE - RETURNING IGNORED!")
             logger.info("WhatsApp message ignored - no valid message data")
             return JSONResponse(content={"status": "ignored"})
 
-        # Step 3: Schedule async processing (don't wait for it)
-        logger.info("Scheduling WhatsApp background task",
-                   from_number=message_data.get("from"),
-                   message_preview=message_data.get("text", "")[:50])
+        # Step 5: Extract message details
+        user_phone = message_data.get("from")
+        user_message = message_data.get("text")
+        message_id = message_data.get("message_id")
+        print(f"🔥 EXTRACTED DETAILS - Phone: {user_phone}, Message: {user_message}, ID: {message_id}")
 
-        background_tasks.add_task(
-            process_whatsapp_message_async,
-            message_data=message_data,
-            settings=settings
-        )
+        logger.info("WhatsApp message details extracted",
+                   user_phone=user_phone,
+                   user_message_length=len(user_message) if user_message else 0,
+                   message_id=message_id)
 
-        logger.info("WhatsApp background task scheduled successfully")
+        if not user_phone or not user_message:
+            print(f"🔥 MISSING REQUIRED FIELDS - Phone: {bool(user_phone)}, Message: {bool(user_message)}")
+            logger.warning("WhatsApp message missing required fields",
+                          has_phone=bool(user_phone),
+                          has_message=bool(user_message))
+            return JSONResponse(content={"status": "ignored"})
 
-        # Step 4: Return immediate success (as required by Meta)
+        # Step 6: Process message synchronously (with timeout)
+        # FastAPI background tasks don't work reliably in multi-worker production
+        print(f"🚀 PROCESSING MESSAGE SYNCHRONOUSLY for {user_phone}: {user_message}")
+        
+        try:
+            # Process the message through WhatsApp-specific RAG system for proper formatting and cleaning
+            rag_response = await process_chat_request_whatsapp(
+                query=user_message,
+                conversation_id=f"whatsapp_{user_phone}",
+                settings=settings
+            )
+            
+            print(f"🚀 RAG RESPONSE GENERATED: {rag_response.get('response', '')[:100]}...")
+            
+            # Send RAG response back via WhatsApp
+            whatsapp_client = get_whatsapp_client()
+            send_result = await whatsapp_client.send_rag_response(
+                to=user_phone,
+                rag_response=rag_response,
+                include_sources=False  # Keep WhatsApp messages clean and concise
+            )
+            
+            print(f"🚀 WHATSAPP RESPONSE SENT: {send_result}")
+            
+            logger.info(
+                "WhatsApp message processed and response sent",
+                to=user_phone,
+                message_id=send_result.get("message_id"),
+                confidence=rag_response.get("confidence"),
+                processing_time_ms=rag_response.get("processing_time_ms")
+            )
+            
+        except Exception as e:
+            print(f"🚀 PROCESSING ERROR: {str(e)}")
+            logger.error(
+                "WhatsApp message processing failed",
+                error=str(e),
+                from_number=user_phone,
+                message_id=message_id
+            )
+            # Still return success to avoid webhook retries
+            
+        # Step 7: Return immediate success (as required by Meta)
+        logger.info("WhatsApp webhook processed successfully")
         return JSONResponse(content={"status": "received"})
 
     except Exception as e:
@@ -1615,97 +1908,7 @@ async def whatsapp_webhook_receive(
         return JSONResponse(content={"status": "error", "message": "Webhook processed with errors"})
 
 
-async def process_whatsapp_message_async(
-    message_data: Dict[str, Any],
-    settings: Settings
-):
-    """
-    Asynchronous WhatsApp message processing function.
-
-    This function handles the actual RAG processing and response sending
-    in the background, allowing the webhook to respond quickly to Meta.
-
-    Args:
-        message_data: Parsed message data from WhatsApp
-        settings: Application settings
-    """
-    logger.info("WhatsApp async processing started", message_data_keys=list(message_data.keys()))
-    try:
-        # Extract message details
-        user_phone = message_data["from"]
-        user_message = message_data["text"]
-        message_id = message_data["message_id"]
-
-        logger.info(
-            "Processing WhatsApp message asynchronously",
-            from_number=user_phone,
-            message_id=message_id,
-            message_length=len(user_message),
-            message_text=user_message[:100]  # Log first 100 chars for debugging
-        )
-
-        # Process message through RAG system (same as web UI)
-        rag_service = get_rag_service()
-        logger.info(
-            "WhatsApp RAG processing started",
-            query=user_message,
-            conversation_id=f"whatsapp_{user_phone}",
-            max_context_chunks=8,
-            confidence_threshold=settings.confidence_threshold
-        )
-
-        rag_response = await rag_service.generate_response(
-            query=user_message,
-            conversation_id=f"whatsapp_{user_phone}",
-            max_context_chunks=8,  # Same as web UI for consistent responses
-            confidence_threshold=settings.confidence_threshold,  # Use same threshold as web UI
-            channel="chat"  # Use same channel as web UI for consistent processing
-        )
-
-        logger.info(
-            "WhatsApp RAG processing completed",
-            response_length=len(rag_response.get("response", "")),
-            confidence=rag_response.get("confidence", 0),
-            sources_count=len(rag_response.get("sources", [])),
-            response_preview=rag_response.get("response", "")[:100]
-        )
-
-        # Send RAG response back via WhatsApp
-        whatsapp_client = get_whatsapp_client()
-        logger.info(
-            "Sending WhatsApp response",
-            to=user_phone,
-            response_to_send=rag_response.get("response", "")[:100]
-        )
-
-        send_result = await whatsapp_client.send_rag_response(
-            to=user_phone,
-            rag_response=rag_response,
-            include_sources=False  # Keep WhatsApp messages clean and concise
-        )
-
-        logger.info(
-            "WhatsApp response sent",
-            to=user_phone,
-            send_success=send_result.get("success", False),
-            message_id=send_result.get("message_id", "unknown")
-        )
-
-        logger.info(
-            "WhatsApp RAG response sent successfully",
-            to=user_phone,
-            message_id=send_result.get("message_id"),
-            confidence=rag_response.get("confidence"),
-            processing_time_ms=rag_response.get("processing_time_ms")
-        )
-
-    except Exception as e:
-        logger.error(
-            "Async WhatsApp message processing failed",
-            error=str(e),
-            from_number=message_data.get("from"),
-            message_id=message_data.get("message_id")
-        )
+# UNUSED FUNCTION REMOVED - No longer needed
 
 
 @app.get("/whatsapp/status")
@@ -1742,3 +1945,45 @@ async def whatsapp_status(settings: Settings = Depends(get_settings)):
             "configured": settings.is_whatsapp_configured(),
             "error": str(e)
         })
+
+
+@app.get("/whatsapp/rate-limit")
+async def whatsapp_rate_limit_info(
+    request: Request,
+    settings: Settings = Depends(get_settings)
+):
+    """
+    Get WhatsApp rate limit information for the current client.
+    
+    This endpoint helps debug rate limiting issues.
+    """
+    try:
+        if not settings.is_whatsapp_configured():
+            return JSONResponse(content={
+                "status": "not_configured",
+                "message": "WhatsApp not configured"
+            })
+        
+        client_ip = request.client.host if request.client else "unknown"
+        
+        # Import rate limit function
+        from .middleware import get_rate_limit_info
+        
+        rate_info = get_rate_limit_info(client_ip, "whatsapp_webhook")
+        
+        return JSONResponse(content={
+            "status": "success",
+            "rate_limit_info": rate_info,
+            "limits": {
+                "whatsapp_webhook": "10 requests per minute",
+                "chat": "30 requests per minute",
+                "document_upload": "5 requests per minute"
+            }
+        })
+        
+    except Exception as e:
+        logger.error("WhatsApp rate limit info failed", error=str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "message": f"Rate limit info failed: {str(e)}"}
+        )

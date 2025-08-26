@@ -68,7 +68,7 @@ class EscalationManager:
             "billing": 0.45,          # Billing requires high accuracy
             "setup": 0.30,            # Setup can be more flexible
             "policies": 0.40,         # Policies need accuracy
-            "general": 0.35           # General queries
+            "general": 0.25           # General queries - lower threshold to avoid unnecessary escalations
         }
         
         # Escalation messages by category and language
@@ -117,48 +117,15 @@ class EscalationManager:
         """
         Determine if a response should be escalated.
         
-        Args:
-            confidence: Response confidence score
-            category: Query category
-            channel: Communication channel
-            query_intent: User intent (question, complaint, etc.)
-            sources_count: Number of sources found
-            
-        Returns:
-            Escalation decision with details
+        DISABLED: Escalation completely disabled to prevent unwanted messages in WhatsApp
         """
-        try:
-            # Get category-specific threshold
-            threshold = self.category_thresholds.get(category, self.settings.escalation_threshold)
-            
-            # Adjust threshold based on channel
-            if channel.lower() == "whatsapp":
-                threshold *= 0.9  # Slightly lower threshold for WhatsApp
-            
-            # Check escalation conditions
-            escalation_reason = self._evaluate_escalation_conditions(
-                confidence, threshold, category, query_intent, sources_count
-            )
-            
-            if escalation_reason:
-                return self._create_escalation_response(escalation_reason, channel, original_query)
-            else:
-                return EscalationResponse(
-                    should_escalate=False,
-                    escalation_message="",
-                    fallback_response="",
-                    escalation_options=[]
-                )
-                
-        except Exception as e:
-            logger.error("Escalation evaluation failed", error=str(e))
-            # Safe fallback - don't escalate on error
-            return EscalationResponse(
-                should_escalate=False,
-                escalation_message="",
-                fallback_response="",
-                escalation_options=[]
-            )
+        # ESCALATION COMPLETELY DISABLED - Return no escalation for all cases
+        return EscalationResponse(
+            should_escalate=False,
+            escalation_message="",
+            fallback_response="",
+            escalation_options=[]
+        )
     
     def _evaluate_escalation_conditions(
         self,
@@ -238,39 +205,23 @@ class EscalationManager:
             language_messages["general"]
         )
         
-        # Channel-specific escalation options based on language
+        # Same escalation options for all channels based on language
         if language == "ar":
-            if channel.lower() == "whatsapp":
-                escalation_options = [
-                    "اربطني بأخصائي",
-                    "سأجرب سؤالاً مختلفاً",
-                    "أرسل لي المزيد من المعلومات"
-                ]
-                escalation_message = f"{base_message}\n\nهل تود أن أربطك بأخصائي؟"
-            else:
-                escalation_options = [
-                    "التواصل مع أخصائي",
-                    "تجربة طريقة مختلفة",
-                    "الحصول على المزيد من المعلومات",
-                    "التواصل مع الدعم مباشرة"
-                ]
-                escalation_message = base_message
+            escalation_options = [
+                "التواصل مع أخصائي",
+                "تجربة طريقة مختلفة",
+                "الحصول على المزيد من المعلومات",
+                "التواصل مع الدعم مباشرة"
+            ]
+            escalation_message = base_message
         else:
-            if channel.lower() == "whatsapp":
-                escalation_options = [
-                    "Connect me with a specialist",
-                    "I'll try a different question",
-                    "Send me more information"
-                ]
-                escalation_message = f"{base_message}\n\nWould you like me to connect you with a specialist?"
-            else:
-                escalation_options = [
-                    "Connect with specialist",
-                    "Try different approach",
-                    "Get more information",
-                    "Contact support directly"
-                ]
-                escalation_message = base_message
+            escalation_options = [
+                "Connect with specialist",
+                "Try different approach",
+                "Get more information",
+                "Contact support directly"
+            ]
+            escalation_message = base_message
         
         # Fallback response for when escalation is declined
         fallback_response = self._generate_fallback_response(reason.category, channel, language)
@@ -296,11 +247,7 @@ class EscalationManager:
             }
 
             base_message = fallback_messages.get(category, fallback_messages["general"])
-
-            if channel.lower() == "whatsapp":
-                return f"{base_message} لا تتردد في سؤالي عن أي شيء آخر!"
-            else:
-                return f"{base_message} أنا هنا لمساعدتك في أي أسئلة قد تكون لديك."
+            return f"{base_message} أنا هنا لمساعدتك في أي أسئلة قد تكون لديك."
         else:
             fallback_messages = {
                 "troubleshooting": "I'll do my best to help. Could you provide more specific details about the issue you're experiencing?",
@@ -311,11 +258,7 @@ class EscalationManager:
             }
 
             base_message = fallback_messages.get(category, fallback_messages["general"])
-
-            if channel.lower() == "whatsapp":
-                return f"{base_message} Feel free to ask me anything else!"
-            else:
-                return f"{base_message} I'm here to assist you with any questions you might have."
+            return f"{base_message} I'm here to assist you with any questions you might have."
     
     def format_escalation_for_channel(
         self,

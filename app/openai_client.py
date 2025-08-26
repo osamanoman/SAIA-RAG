@@ -163,7 +163,7 @@ class OpenAIClient:
         """
         model = model or self.settings.openai_chat_model
         max_tokens = max_tokens or 500
-        temperature = temperature if temperature is not None else 0.7
+        temperature = temperature if temperature is not None else 0.0  # Deterministic responses
         
         try:
             start_time = datetime.utcnow()
@@ -179,12 +179,13 @@ class OpenAIClient:
             
             chat_messages.extend(messages)
             
-            # Generate chat completion
+            # Generate chat completion with deterministic parameters
             response = self.client.chat.completions.create(
                 model=model,
                 messages=chat_messages,
                 max_tokens=max_tokens,
-                temperature=temperature
+                temperature=temperature,
+                seed=42  # Fixed seed for deterministic responses
             )
             
             # Extract response content

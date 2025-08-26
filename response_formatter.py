@@ -332,9 +332,39 @@ class ResponseFormatter:
             return self._format_english_for_whatsapp(content)
     
     def _format_arabic_for_whatsapp(self, content: str) -> str:
-        """Format Arabic content for WhatsApp."""
+        """Format Arabic content for WhatsApp with comprehensive formatting and RTL support."""
         # Clean up the content first
         content = content.strip()
+        
+        # WhatsApp formatting best practices:
+        # 1. Consistent bullet points
+        # 2. Proper line spacing
+        # 3. RTL text direction
+        # 4. Strategic emoji usage
+        # 5. Mobile-optimized structure
+        
+        # First, try to detect if content contains multiple services/points that should be bulleted
+        bullet_indicators = [
+            'خدمات', 'خدمة', 'مميزات', 'ميزات', 'خصائص', 'أقسام', 'أنواع', 'فئات',
+            'أولاً', 'ثانياً', 'ثالثاً', 'أخيراً', 'أيضاً', 'بالإضافة إلى', 'كذلك',
+            'مثل', 'تشمل', 'تتضمن', 'تقدم', 'توفر', 'تشمل', 'تتضمن', 'تقدم', 'توفر'
+        ]
+        
+        has_bullet_indicators = any(indicator in content for indicator in bullet_indicators)
+        
+        # Clean up inconsistent bullet formatting first
+        # Replace all variations of bullet points with consistent ones
+        content = re.sub(r'[.*\-]\s*', '• ', content)  # Replace . * - with •
+        content = re.sub(r'\.\s*\.\s*', '• ', content)  # Replace .. with •
+        content = re.sub(r'\*\s*', '• ', content)  # Replace * with •
+        content = re.sub(r'-\s*', '• ', content)  # Replace - with •
+        
+        # Clean up multiple consecutive bullet points
+        content = re.sub(r'•\s*•\s*•\s*', '• ', content)  # Replace • • • with single •
+        content = re.sub(r'•\s*•\s*', '• ', content)  # Replace • • with single •
+        
+        # Clean up bullet points followed by colons (convert to headers)
+        content = re.sub(r'•\s*([^:]+):\s*•', r'**\1:**', content)  # Convert "• Service: •" to "**Service:**"
         
         # Split into lines
         lines = content.split('\n')
@@ -346,20 +376,32 @@ class ResponseFormatter:
                 continue
                 
             # Check if line contains numbered or bullet points
-            if re.match(r'^\d+\.', line) or re.match(r'^\*', line):
-                # Convert to WhatsApp bullet format
+            if re.match(r'^\d+\.', line):
+                # Convert numbered points to bullet format
                 line = re.sub(r'^\d+\.\s*', '• ', line)
-                line = re.sub(r'^\*\s*', '• ', line)
                 formatted_lines.append(line)
             elif re.match(r'^•', line):
                 # Already formatted, keep as is
                 formatted_lines.append(line)
             else:
-                # Regular text line
+                # Regular text line - check if it should be converted to bullet point
+                if has_bullet_indicators and len(line) > 20:
+                    # Look for sentence endings that suggest separate points
+                    if any(ending in line for ending in ['،', '.', '؛', '!', '؟']):
+                        # Split by common separators and create bullet points
+                        sentences = re.split(r'[،.؛!؟]', line)
+                        for sentence in sentences:
+                            sentence = sentence.strip()
+                            if sentence and len(sentence) > 10:  # Only meaningful sentences
+                                # Ensure proper RTL formatting for Arabic
+                                formatted_lines.append(f"• {sentence}")
+                        continue
+                
+                # If not converting to bullets, keep as regular line
                 formatted_lines.append(line)
         
-        # Join lines with proper spacing
-        formatted_content = '\n'.join(formatted_lines)
+        # Join lines with proper spacing for RTL and WhatsApp readability
+        formatted_content = '\n\n'.join(formatted_lines)  # Double line spacing for better readability
         
         # Add WhatsApp-friendly emojis for common patterns
         if 'خدمات' in formatted_content or 'خدمة' in formatted_content:
@@ -377,12 +419,49 @@ class ResponseFormatter:
         if 'سياسة' in formatted_content or 'شروط' in formatted_content:
             formatted_content = "📋 " + formatted_content
         
+        # Apply advanced WhatsApp formatting
+        formatted_content = self._apply_whatsapp_advanced_formatting(formatted_content, "ar")
+        
+        # Ensure proper RTL formatting for Arabic text
+        # Add RTL mark at the beginning to ensure proper text direction
+        formatted_content = f"\u202B{formatted_content}"
+        
         return formatted_content
     
     def _format_english_for_whatsapp(self, content: str) -> str:
-        """Format English content for WhatsApp."""
+        """Format English content for WhatsApp with comprehensive formatting."""
         # Clean up the content first
         content = content.strip()
+        
+        # WhatsApp formatting best practices:
+        # 1. Consistent bullet points
+        # 2. Proper line spacing
+        # 3. Strategic emoji usage
+        # 4. Mobile-optimized structure
+        # 5. Clear hierarchy
+        
+        # First, try to detect if content contains multiple services/points that should be bulleted
+        bullet_indicators = [
+            'services', 'service', 'features', 'benefits', 'options', 'types', 'categories',
+            'first', 'second', 'third', 'also', 'additionally', 'furthermore', 'moreover',
+            'such as', 'including', 'provides', 'offers', 'enables'
+        ]
+        
+        has_bullet_indicators = any(indicator in content.lower() for indicator in bullet_indicators)
+        
+        # Clean up inconsistent bullet formatting first
+        # Replace all variations of bullet points with consistent ones
+        content = re.sub(r'[.*\-]\s*', '• ', content)  # Replace . * - with •
+        content = re.sub(r'\.\s*\.\s*', '• ', content)  # Replace .. with •
+        content = re.sub(r'\*\s*', '• ', content)  # Replace * with •
+        content = re.sub(r'-\s*', '• ', content)  # Replace - with •
+        
+        # Clean up multiple consecutive bullet points
+        content = re.sub(r'•\s*•\s*•\s*', '• ', content)  # Replace • • • with single •
+        content = re.sub(r'•\s*•\s*', '• ', content)  # Replace • • with single •
+        
+        # Clean up bullet points followed by colons (convert to headers)
+        content = re.sub(r'•\s*([^:]+):\s*•', r'**\1:**', content)  # Convert "• Service: •" to "**Service:**"
         
         # Split into lines
         lines = content.split('\n')
@@ -394,20 +473,31 @@ class ResponseFormatter:
                 continue
                 
             # Check if line contains numbered or bullet points
-            if re.match(r'^\d+\.', line) or re.match(r'^\*', line):
-                # Convert to WhatsApp bullet format
+            if re.match(r'^\d+\.', line):
+                # Convert numbered points to bullet format
                 line = re.sub(r'^\d+\.\s*', '• ', line)
-                line = re.sub(r'^\*\s*', '• ', line)
                 formatted_lines.append(line)
             elif re.match(r'^•', line):
                 # Already formatted, keep as is
                 formatted_lines.append(line)
             else:
-                # Regular text line
+                # Regular text line - check if it should be converted to bullet point
+                if has_bullet_indicators and len(line) > 20:
+                    # Look for sentence endings that suggest separate points
+                    if any(ending in line for ending in [',', '.', ';', '!', '?']):
+                        # Split by common separators and create bullet points
+                        sentences = re.split(r'[,.;!?]', line)
+                        for sentence in sentences:
+                            sentence = sentence.strip()
+                            if sentence and len(sentence) > 10:  # Only meaningful sentences
+                                formatted_lines.append(f"• {sentence}")
+                        continue
+                
+                # If not converting to bullets, keep as regular line
                 formatted_lines.append(line)
         
-        # Join lines with proper spacing
-        formatted_content = '\n'.join(formatted_lines)
+        # Join lines with proper spacing for WhatsApp readability
+        formatted_content = '\n\n'.join(formatted_lines)  # Double line spacing for better readability
         
         # Add WhatsApp-friendly emojis for common patterns
         if 'service' in formatted_content.lower() or 'help' in formatted_content.lower():
@@ -424,6 +514,9 @@ class ResponseFormatter:
             
         if 'policy' in formatted_content.lower() or 'terms' in formatted_content.lower():
             formatted_content = "📋 " + formatted_content
+        
+        # Apply advanced WhatsApp formatting
+        formatted_content = self._apply_whatsapp_advanced_formatting(formatted_content, "en")
         
         return formatted_content
     
@@ -464,6 +557,114 @@ class ResponseFormatter:
         #     content = f"{content}\n\n{ending}"
         
         return content
+
+    def _apply_whatsapp_advanced_formatting(self, content: str, language: str) -> str:
+        """
+        Apply comprehensive WhatsApp formatting following best practices:
+        
+        1. Break text into shorter sentences
+        2. Use bullet points or lists
+        3. Use line breaks to separate ideas
+        4. Add formatting (Bold, Italics)
+        5. Improve readability using emojis
+        6. Clarity in action points
+        7. Context-specific responses
+        """
+        
+        if language == "ar":
+            # Arabic formatting improvements
+            
+            # 1. Add emojis for different sections
+            content = re.sub(r'^(خدمات|مميزات|خصائص|أقسام|أنواع|فئات):', r'💼 \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(أولاً|ثانياً|ثالثاً|أخيراً):', r'🔢 \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(الميزات|الأسعار|طرق الدعم):', r'⭐ \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(تأمين|حماية|ضمان):', r'🛡️ \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(دعم|مساعدة|خدمة):', r'💬 \1:', content, flags=re.MULTILINE)
+            
+            # 2. Add emojis to bullet points for visual appeal
+            content = re.sub(r'^\s*•\s*', '✅ ', content, flags=re.MULTILINE)
+            
+            # 3. Bold important headers
+            content = re.sub(r'^(💼 [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            content = re.sub(r'^(🔢 [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            content = re.sub(r'^(⭐ [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            
+            # 4. Add line breaks for better readability
+            content = re.sub(r'([.!؟])\s*', r'\1\n\n', content)
+            
+            # 5. Ensure proper spacing around bullet points
+            content = re.sub(r'(\n✅ )', r'\n\n✅ ', content)
+            
+            # 6. Add emojis for common insurance terms
+            content = re.sub(r'\b(تأمين المركبات)\b', r'🚗 \1', content)
+            content = re.sub(r'\b(تأمين شامل)\b', r'🛡️ \1', content)
+            content = re.sub(r'\b(وثائق التأمين)\b', r'📋 \1', content)
+            content = re.sub(r'\b(المطالبات)\b', r'📝 \1', content)
+            content = re.sub(r'\b(الدفع)\b', r'💳 \1', content)
+            
+        else:
+            # English formatting improvements
+            
+            # 1. Add emojis for different sections
+            content = re.sub(r'^(Services|Features|Benefits|Options|Types|Categories):', r'💼 \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(First|Second|Third|Finally):', r'🔢 \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(Features|Pricing|Support):', r'⭐ \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(Insurance|Protection|Coverage):', r'🛡️ \1:', content, flags=re.MULTILINE)
+            content = re.sub(r'^(Support|Help|Service):', r'💬 \1:', content, flags=re.MULTILINE)
+            
+            # 2. Add emojis to bullet points
+            content = re.sub(r'^\s*•\s*', '✅ ', content, flags=re.MULTILINE)
+            
+            # 3. Bold important headers
+            content = re.sub(r'^(💼 [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            content = re.sub(r'^(🔢 [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            content = re.sub(r'^(⭐ [^:]+):', r'*\1*', content, flags=re.MULTILINE)
+            
+            # 4. Add line breaks for better readability
+            content = re.sub(r'([.!?])\s*', r'\1\n\n', content)
+            
+            # 5. Ensure proper spacing around bullet points
+            content = re.sub(r'(\n✅ )', r'\n\n✅ ', content)
+            
+            # 6. Add emojis for common insurance terms
+            content = re.sub(r'\b(Vehicle Insurance)\b', r'🚗 \1', content, flags=re.IGNORECASE)
+            content = re.sub(r'\b(Comprehensive Insurance)\b', r'🛡️ \1', content, flags=re.IGNORECASE)
+            content = re.sub(r'\b(Insurance Documents)\b', r'📋 \1', content, flags=re.IGNORECASE)
+            content = re.sub(r'\b(Claims)\b', r'📝 \1', content, flags=re.IGNORECASE)
+            content = re.sub(r'\b(Payment)\b', r'💳 \1', content, flags=re.IGNORECASE)
+        
+        # 7. Limit line length for mobile screens
+        max_line_length = 40 if language == "ar" else 60
+        
+        # Split long lines for better mobile readability
+        lines = content.split('\n')
+        formatted_lines = []
+        
+        for line in lines:
+            if len(line) > max_line_length and not line.startswith('✅'):
+                # Split long lines at natural break points
+                words = line.split()
+                current_line = ""
+                for word in words:
+                    if len(current_line + word) <= max_line_length:
+                        current_line += (word + " ")
+                    else:
+                        if current_line:
+                            formatted_lines.append(current_line.strip())
+                        current_line = word + " "
+                if current_line:
+                    formatted_lines.append(current_line.strip())
+            else:
+                formatted_lines.append(line)
+        
+        # Join with proper spacing and ensure clean formatting
+        formatted_content = '\n'.join(formatted_lines)
+        
+        # Final cleanup: ensure consistent spacing
+        formatted_content = re.sub(r'\n{3,}', '\n\n', formatted_content)  # Remove excessive line breaks
+        formatted_content = re.sub(r'✅\s*✅', '✅', formatted_content)  # Remove duplicate checkmarks
+        
+        return formatted_content
 
 
 # Global instance

@@ -327,7 +327,10 @@ class RAGService:
                 query_intent=query_metadata.get("query_intent", "question")
             )
 
-            final_response = formatted_response.content
+            final_response = formatted_response.content  # Extract the content string
+            
+            # Since formatted_response is now a string, we need to handle the missing attributes
+            # that the code expects later
             
             # ROOT CAUSE FIXED - No more unwanted text generation
             # The system prompt now prevents escalation messages from being generated
@@ -488,6 +491,36 @@ class RAGService:
 - لا تقدم خيارات أو قوائم إضافية
 - ابدأ إجابتك مباشرة بالمعلومات المطلوبة
 
+📱 تنسيق WhatsApp - استخدم هذا التنسيق دائماً:
+
+**1. هيكل واضح:**
+- ابدأ بفقرة قصيرة تمهيدية
+- ثم اذكر "تشمل الخدمات:" أو "المميزات:"
+- استخدم نقاط (•) واحدة فقط لكل عنصر
+- انهِ بفقرة ختامية قصيرة
+
+**2. تنسيق النقاط:**
+- استخدم (•) واحدة فقط لكل عنصر
+- لا تستخدم (• • •) أو نقاط متعددة
+- اترك مسافة بين كل نقطة
+
+**3. طول الفقرات:**
+- فقرات قصيرة (2-3 جملة كحد أقصى)
+- استخدم فواصل واضحة بين الأفكار
+- اجعل كل نقطة مفهومة ومحددة
+
+**4. مثال على التنسيق:**
+```
+وازن هي منصة رقمية متخصصة في التأمين.
+
+تشمل الخدمات:
+• تأمين المركبات
+• تأمين شامل
+• إدارة الوثائق
+
+نقدم تجربة سلسة ومهنية.
+```
+
 معلومات السياق:
 {context}
 
@@ -504,6 +537,7 @@ class RAGService:
 8. كن مساعداً وقدم معلومات قيمة للمستخدم
 9. انهِ إجابتك بنقطة (.) ولا تضف أي نص إضافي
 10. لا تستخدم أي عبارات إنجليزية مطلقاً
+11. استخدم تنسيق WhatsApp المناسب (أرقام، نقاط، فقرات قصيرة)
 
 إرشادات خاصة بالفئة:
 {specific_instructions}
@@ -536,6 +570,13 @@ class RAGService:
 - NEVER offer additional options or lists
 - Start your response DIRECTLY with the requested information
 
+📱 WhatsApp Formatting - Always use this format:
+- If the answer contains steps: use numbers (1. 2. 3.)
+- If the answer contains points: use bullet points (•)
+- If the answer contains options: use bullet points (•)
+- Use short, clearly separated paragraphs
+- Make the answer easy to read on WhatsApp
+
 CONTEXT INFORMATION:
 {context}
 
@@ -548,6 +589,7 @@ GENERAL INSTRUCTIONS:
 4. If you reference specific information, you can mention it comes from the provided sources
 5. Maintain a helpful, professional tone
 6. If the user asks about something not covered in the context, politely explain that you don't have that information available
+7. Use appropriate WhatsApp formatting (numbers, bullet points, short paragraphs)
 7. Answer in English only - do not use any Arabic words
 
 CATEGORY-SPECIFIC GUIDANCE:

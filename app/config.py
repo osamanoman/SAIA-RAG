@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     
     # === CORE APPLICATION SETTINGS ===
     app_name: str = Field(
-        default="SAIA-RAG Customer Support AI Assistant",
+        default="Wazen AI Assistant",
         description="Application name"
     )
     app_version: str = Field(
@@ -55,6 +55,16 @@ class Settings(BaseSettings):
         default="text-embedding-3-large",
         alias="OPENAI_EMBED_MODEL",
         description="OpenAI embedding model to use"
+    )
+    openai_max_tokens: int = Field(
+        default=500,
+        alias="OPENAI_MAX_TOKENS",
+        description="Maximum tokens for OpenAI responses"
+    )
+    openai_temperature: float = Field(
+        default=0.7,
+        alias="OPENAI_TEMPERATURE",
+        description="Temperature for OpenAI response generation"
     )
     
     # === VECTOR DATABASE CONFIGURATION ===
@@ -96,6 +106,11 @@ class Settings(BaseSettings):
         default=200,
         alias="CHUNK_OVERLAP",
         description="Overlap between document chunks"
+    )
+    rag_search_limit: int = Field(
+        default=8,
+        alias="RAG_SEARCH_LIMIT",
+        description="Maximum chunks to retrieve for RAG context"
     )
 
     # === CUSTOMER SUPPORT SPECIFIC CONFIGURATION ===
@@ -305,6 +320,30 @@ class Settings(BaseSettings):
             self.whatsapp_phone_number_id,
             self.whatsapp_verify_token
         ])
+
+    @field_validator("whatsapp_verify_token")
+    @classmethod
+    def validate_whatsapp_verify_token(cls, v: Optional[str]) -> Optional[str]:
+        """Validate WhatsApp verify token."""
+        if v is not None and len(v) < 10:
+            raise ValueError("WhatsApp verify token must be at least 10 characters long")
+        return v
+
+    @field_validator("whatsapp_phone_number_id")
+    @classmethod
+    def validate_whatsapp_phone_number_id(cls, v: Optional[str]) -> Optional[str]:
+        """Validate WhatsApp phone number ID."""
+        if v is not None and not v.isdigit():
+            raise ValueError("WhatsApp phone number ID must contain only digits")
+        return v
+
+    @field_validator("whatsapp_access_token")
+    @classmethod
+    def validate_whatsapp_access_token(cls, v: Optional[str]) -> Optional[str]:
+        """Validate WhatsApp access token."""
+        if v is not None and len(v) < 50:
+            raise ValueError("WhatsApp access token appears to be too short")
+        return v
 
 
 @lru_cache()
