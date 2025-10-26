@@ -310,8 +310,46 @@ class ResponseFormatter:
         """Apply channel-specific formatting optimizations."""
         if channel == "whatsapp":
             return self._format_for_whatsapp(content), True
+        elif channel == "web":
+            return self._format_for_web(content), True
         # All other channels get identical formatting for consistency
         return content, False
+
+    def _format_for_web(self, content: str) -> str:
+        """
+        Format content for web display with proper markdown structure.
+
+        Converts inline markdown to multi-line markdown that marked.js can parse correctly.
+        This fixes the issue where AI generates everything in one line without line breaks.
+        """
+        import re
+
+        # Step 1: Add line breaks before bold headers that start sections
+        # Pattern: "text **Header:**" -> "text\n\n**Header:**"
+        # Do this first before handling numbered lists
+        content = re.sub(r'([^\n])\s+(\*\*[^*]+:\*\*)', r'\1\n\n\2', content)
+
+        # Step 2: Add line breaks before numbered list items (1. 2. 3. etc.)
+        # Pattern: "text 1. **Title:**" -> "text\n\n1. **Title:**"
+        # Keep the number with its content on the same line
+        content = re.sub(r'([^\n\d])\s+(\d+\.\s+)', r'\1\n\n\2', content)
+
+        # Step 2b: Merge numbered items that are separated from their content
+        # Pattern: "1.\n\n**Title:**" -> "1. **Title:**"
+        content = re.sub(r'(\d+\.)\s*\n+\s*(\*\*)', r'\1 \2', content)
+
+        # Step 3: Add line breaks before bullet points (- or •)
+        # Pattern: "text - item" or "text • item" -> "text\n\n- item"
+        content = re.sub(r'([^\n])\s+([-•]\s+)', r'\1\n\n\2', content)
+
+        # Step 4: Add line break after emoji at the start if followed by text
+        # Pattern: "📋 text" -> "📋\n\ntext"
+        content = re.sub(r'^([\U0001F300-\U0001F9FF])\s+', r'\1\n\n', content)
+
+        # Step 5: Clean up multiple consecutive line breaks (more than 2)
+        content = re.sub(r'\n{3,}', '\n\n', content)
+
+        return content.strip()
     
     def _format_for_whatsapp(self, content: str) -> str:
         """

@@ -7,11 +7,13 @@ Orchestrates document processing, vector search, and response generation.
 
 from typing import List, Dict, Any, Optional
 from datetime import datetime
+from enum import Enum
 import uuid
 import hashlib
 from functools import lru_cache
 
 import structlog
+from pydantic import BaseModel
 
 from .config import get_settings
 from .openai_client import get_openai_client
@@ -25,6 +27,24 @@ from .conversation_memory import get_conversation_memory_manager, MessageType
 
 # Get logger
 logger = structlog.get_logger()
+
+
+# Query Classification Models (Pydantic v2)
+class QueryType(str, Enum):
+    """Types of queries the system can handle."""
+    CONVERSATIONAL = "conversational"  # Greetings, "what can you do", "how can you help"
+    DOMAIN_SPECIFIC = "domain_specific"  # Legal questions requiring RAG
+
+
+class QueryClassification(BaseModel):
+    """
+    AI-powered query classification result.
+
+    Uses OpenAI structured outputs to intelligently determine
+    whether a query needs RAG or can be answered directly.
+    """
+    query_type: QueryType
+    reasoning: str  # Brief explanation of the classification
 
 
 class RAGService:
@@ -168,67 +188,98 @@ class RAGService:
         }
         logger.info("Response cached", cache_key=cache_key[:8])
 
-    def _is_simple_greeting_or_intro(self, query: str) -> Optional[str]:
+    async def _classify_query(self, query: str) -> QueryClassification:
         """
-        Detect simple greetings or introductory questions and return appropriate response.
+        Use AI to intelligently classify the query type.
+
+        This replaces hardcoded pattern matching with OpenAI's structured outputs,
+        allowing the LLM to understand query intent naturally.
 
         Args:
             query: User query
 
         Returns:
-            Response string if it's a simple greeting, None otherwise
+            QueryClassification with type and reasoning
         """
-        query_lower = query.lower().strip()
+        try:
+            classification_prompt = f"""Classify this user query into one of two categories:
 
-        # Arabic greetings and introductions
-        arabic_patterns = {
-            # Greetings
-            ("مرحبا", "مرحباً", "اهلا", "أهلا", "السلام عليكم", "سلام"):
-                "مرحباً بك! 👋 أنا SAIA، مساعدك الذكي المتخصص في القانون السعودي للأحوال الشخصية. كيف يمكنني مساعدتك اليوم؟",
+1. **CONVERSATIONAL**: Greetings, introductions, "what can you do", "how can you help", "who are you", "thank you", or general chitchat
+2. **DOMAIN_SPECIFIC**: Questions about Saudi law, legal procedures, custody, marriage, divorce, inheritance, or any legal topic
 
-            # Who are you
-            ("من انت", "من أنت", "ما اسمك", "عرف نفسك", "عرفني عنك", "من تكون"):
-                "أنا SAIA، مساعد ذكي متخصص في القانون السعودي للأحوال الشخصية. أستطيع مساعدتك في الإجابة على أسئلتك القانونية المتعلقة بالزواج، الطلاق، الحضانة، النفقة، وغيرها من مسائل الأحوال الشخصية. كيف يمكنني مساعدتك؟",
+User Query: "{query}"
 
-            # What can you do
-            ("ماذا تستطيع", "ماذا يمكنك", "ما هي قدراتك", "كيف تساعدني", "ما الذي تقدمه"):
-                "أستطيع مساعدتك في:\n• الإجابة على أسئلتك حول قانون الأحوال الشخصية السعودي\n• توضيح الإجراءات القانونية للزواج والطلاق\n• شرح حقوق الحضانة والنفقة\n• تقديم معلومات عن الميراث والوصية\n• الإجابة على استفساراتك القانونية الأخرى\n\nما الذي تود معرفته؟",
+Classify the query and provide brief reasoning."""
 
-            # How are you
-            ("كيف حالك", "كيف الحال", "كيفك", "شلونك"):
-                "بخير، شكراً لسؤالك! 😊 كيف يمكنني مساعدتك اليوم في أمورك القانونية؟",
+            completion = await self.openai_client.beta.chat.completions.parse(
+                model="gpt-4o-mini",  # Fast and cost-effective for classification
+                messages=[
+                    {"role": "system", "content": "You are a query classifier for a Saudi legal AI assistant."},
+                    {"role": "user", "content": classification_prompt}
+                ],
+                response_format=QueryClassification,
+                temperature=0.0  # Deterministic classification
+            )
 
-            # Thank you
-            ("شكرا", "شكراً", "مشكور", "يعطيك العافية", "الله يعطيك العافية"):
-                "العفو! 😊 سعيد بمساعدتك. إذا كان لديك أي استفسار آخر، لا تتردد في السؤال.",
-        }
+            classification = completion.choices[0].message.parsed
+            logger.info(
+                "Query classified",
+                query=query[:50],
+                type=classification.query_type,
+                reasoning=classification.reasoning
+            )
+            return classification
 
-        # English greetings
-        english_patterns = {
-            ("hello", "hi", "hey", "greetings"):
-                "Hello! 👋 I'm SAIA, your AI assistant specialized in Saudi Personal Status Law. How can I help you today?",
+        except Exception as e:
+            logger.error("Query classification failed, defaulting to domain_specific", error=str(e))
+            # On error, default to domain_specific to ensure legal questions get RAG
+            return QueryClassification(
+                query_type=QueryType.DOMAIN_SPECIFIC,
+                reasoning="Classification failed, defaulting to RAG for safety"
+            )
 
-            ("who are you", "what are you", "introduce yourself"):
-                "I'm SAIA, an AI assistant specialized in Saudi Personal Status Law. I can help you with questions about marriage, divorce, custody, alimony, and other personal status matters. How can I assist you?",
+    async def _generate_conversational_response(self, query: str) -> str:
+        """
+        Generate a direct conversational response without RAG.
 
-            ("what can you do", "how can you help"):
-                "I can help you with:\n• Answering questions about Saudi Personal Status Law\n• Explaining legal procedures for marriage and divorce\n• Clarifying custody and alimony rights\n• Providing information about inheritance\n• Answering other legal inquiries\n\nWhat would you like to know?",
+        Used for greetings, "what can you do" questions, etc.
 
-            ("thank you", "thanks", "thx"):
-                "You're welcome! 😊 Feel free to ask if you have any other questions.",
-        }
+        Args:
+            query: User query
 
-        # Check Arabic patterns
-        for patterns, response in arabic_patterns.items():
-            if any(pattern in query_lower for pattern in patterns):
-                return response
+        Returns:
+            Direct AI response
+        """
+        try:
+            system_prompt = """You are SAIA, an AI assistant specialized in Saudi Personal Status Law.
 
-        # Check English patterns
-        for patterns, response in english_patterns.items():
-            if any(pattern == query_lower or query_lower.startswith(pattern) for pattern in patterns):
-                return response
+When users ask conversational questions (greetings, "what can you do", "who are you", etc.):
+- Be friendly and welcoming
+- Briefly introduce yourself as a Saudi law specialist
+- Mention your key capabilities: marriage, divorce, custody, alimony, inheritance
+- Encourage them to ask legal questions
+- Keep responses concise (2-3 sentences for greetings, 4-5 for capability questions)
+- Use appropriate language (Arabic or English) based on the user's query
+- Add relevant emojis for warmth (👋 😊)"""
 
-        return None
+            completion = await self.openai_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": query}
+                ],
+                temperature=0.7,  # Slightly creative for natural conversation
+                max_tokens=200  # Keep conversational responses brief
+            )
+
+            response = completion.choices[0].message.content
+            logger.info("Conversational response generated", query=query[:50], response_length=len(response))
+            return response
+
+        except Exception as e:
+            logger.error("Conversational response generation failed", error=str(e))
+            # Fallback response
+            return "Hello! 👋 I'm SAIA, your AI assistant for Saudi Personal Status Law. How can I help you today?"
 
     async def generate_response(
         self,
@@ -255,21 +306,28 @@ class RAGService:
             start_time = datetime.utcnow()
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
 
-            # Step 0: Check for simple greetings/introductions (no RAG needed)
-            greeting_response = self._is_simple_greeting_or_intro(query)
-            if greeting_response:
+            # Step 0: AI-powered query classification
+            classification = await self._classify_query(query)
+
+            if classification.query_type == QueryType.CONVERSATIONAL:
+                # Handle conversational queries without RAG
+                conversational_response = await self._generate_conversational_response(query)
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
-                logger.info("Simple greeting detected, responding directly", query=query[:50])
+                logger.info(
+                    "Conversational query handled",
+                    query=query[:50],
+                    reasoning=classification.reasoning
+                )
 
                 return {
-                    "response": greeting_response,
+                    "response": conversational_response,
                     "conversation_id": conversation_id,
-                    "confidence": 1.0,  # High confidence for direct responses
+                    "confidence": 1.0,  # High confidence for conversational responses
                     "sources": [],
-                    "sources_count": 0,  # No sources for greetings
+                    "sources_count": 0,  # No sources for conversational queries
                     "processing_time_ms": processing_time,
                     "tokens_used": None,
-                    "preprocessing_steps": ["greeting_detection"],
+                    "preprocessing_steps": ["ai_query_classification", "conversational_response"],
                     "conversation_aware": False
                 }
 
@@ -424,11 +482,11 @@ class RAGService:
             # Clean response for language consistency
             cleaned_response = self._clean_response_language(raw_response, detected_language)
 
-            # Apply response formatting with WhatsApp-specific formatting
+            # Apply response formatting with channel-specific formatting
             formatted_response = self.response_formatter.format_response(
                 content=cleaned_response,
                 category=query_metadata.get("query_category", "general"),
-                channel="whatsapp",  # Enable WhatsApp-specific formatting
+                channel=channel,  # Use the channel parameter passed to generate_response
                 confidence=confidence,
                 sources_count=len(sources),
                 query_intent=query_metadata.get("query_intent", "question")
@@ -658,44 +716,79 @@ class RAGService:
 
 فئة الاستفسار: {query_category}
 
-📋 تعليمات التنسيق والعرض (مهمة جداً):
+📋 تعليمات التنسيق والعرض (CRITICAL - يجب الالتزام التام):
 
-1. **استخدم النقاط والقوائم المرقمة:**
-   - عند ذكر شروط أو متطلبات متعددة، استخدم قائمة مرقمة (1. 2. 3.)
-   - عند ذكر خيارات أو حالات، استخدم نقاط (•)
-   - اترك سطراً فارغاً قبل وبعد كل قائمة
+**IMPORTANT: استخدم تنسيق Markdown الصحيح لضمان عرض جيد في الواجهة:**
 
-2. **قسّم الإجابة إلى أقسام واضحة:**
-   - استخدم عناوين فرعية بخط عريض عند الحاجة (مثل: **الشروط:**، **الإجراءات:**، **الحقوق:**)
-   - اترك سطراً فارغاً بين الأقسام المختلفة
-   - ابدأ كل قسم جديد بسطر منفصل
+1. **القوائم المرقمة (Numbered Lists):**
+   - يجب أن تكون كل نقطة في سطر منفصل
+   - اترك سطراً فارغاً قبل القائمة وبعدها
+   - الصيغة الصحيحة:
+     ```
+     النص التمهيدي:
 
-3. **تجنب الفقرات الطويلة:**
-   - لا تكتب أكثر من 3-4 أسطر في فقرة واحدة
-   - قسّم المعلومات الطويلة إلى نقاط أو فقرات قصيرة
-   - استخدم المسافات البيضاء لتحسين القراءة
+     1. النقطة الأولى
+     2. النقطة الثانية
+     3. النقطة الثالثة
 
-4. **عند الإجابة على أسئلة قانونية:**
-   - ابدأ بملخص قصير (سطر أو سطرين)
-   - ثم قدم التفاصيل في نقاط مرقمة
-   - اذكر أرقام المواد القانونية بوضوح (مثل: المادة 104)
+     النص التالي
+     ```
 
-مثال على التنسيق الجيد:
-```
-يحق للزوجة طلب فسخ عقد الزواج في عدة حالات وفقاً للنظام السعودي:
+2. **القوائم النقطية (Bullet Lists):**
+   - استخدم الرمز `-` أو `*` في بداية كل سطر
+   - اترك سطراً فارغاً قبل القائمة وبعدها
+   - الصيغة الصحيحة:
+     ```
+     النص التمهيدي:
 
-**الحالات التي تجيز الفسخ:**
+     - النقطة الأولى
+     - النقطة الثانية
+     - النقطة الثالثة
 
-1. إذا حلف الزوج على عدم جماعها لمدة تزيد على أربعة أشهر (المادة 103)
+     النص التالي
+     ```
 
-2. إذا امتنع عن جماعها لمدة تزيد على أربعة أشهر بلا عذر مشروع
+3. **النص العريض (Bold):**
+   - استخدم `**النص**` للعناوين والكلمات المهمة
+   - مثال: **الشروط:** أو **مهم:**
 
-3. إذا ثبت أن الزوج قد أضر بها ضرراً يتعذر معه دوام العشرة بالمعروف (المادة 104)
+4. **تقسيم الإجابة:**
+   - ابدأ بملخص قصير (1-2 سطر)
+   - ثم قدم التفاصيل في قوائم منظمة
+   - اترك سطراً فارغاً بين الأقسام
+
+**مثال صحيح للتنسيق:**
+
+شروط الحضانة وفقاً للنظام السعودي:
+
+**الشروط الأساسية:**
+
+1. كمال الأهلية: يجب أن يكون الحاضن بالغاً وعاقلاً
+
+2. القدرة على التربية: يجب أن يكون قادراً على رعاية المحضون
+
+3. السلامة الصحية: يجب أن يكون خالياً من الأمراض المعدية
 
 **الإجراءات المطلوبة:**
-• تقديم طلب للمحكمة المختصة
-• إثبات الضرر أو الحالة المطلوبة
-• انتظار حكم المحكمة
+
+- تقديم طلب للمحكمة
+- إثبات توفر الشروط
+- انتظار حكم المحكمة
+
+**❌ خطأ شائع - لا تفعل هذا:**
+```
+الشروط: 1. الشرط الأول 2. الشرط الثاني 3. الشرط الثالث
+```
+
+**✅ الصيغة الصحيحة:**
+```
+الشروط:
+
+1. الشرط الأول
+
+2. الشرط الثاني
+
+3. الشرط الثالث
 ```
 
 التعليمات المهمة جداً:

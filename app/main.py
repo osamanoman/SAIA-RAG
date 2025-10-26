@@ -792,12 +792,14 @@ async def chat(
         rag_service = get_rag_service()
         logger.info("RAG service obtained")
 
-        # Generate RAG response using WhatsApp processing path for consistency
-        logger.info("Starting RAG response generation")
-        rag_result = await process_chat_request_whatsapp(
+        # Generate RAG response using web channel for proper markdown formatting
+        logger.info("Starting RAG response generation for web UI")
+        rag_result = await rag_service.generate_response(
             query=request.message,
             conversation_id=request.conversation_id,
-            settings=settings
+            max_context_chunks=8,
+            confidence_threshold=settings.confidence_threshold,
+            channel="web"  # Use web channel to preserve markdown formatting
         )
         logger.info("RAG response generated", result_keys=list(rag_result.keys()))
 
