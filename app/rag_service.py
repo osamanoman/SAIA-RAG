@@ -168,6 +168,68 @@ class RAGService:
         }
         logger.info("Response cached", cache_key=cache_key[:8])
 
+    def _is_simple_greeting_or_intro(self, query: str) -> Optional[str]:
+        """
+        Detect simple greetings or introductory questions and return appropriate response.
+
+        Args:
+            query: User query
+
+        Returns:
+            Response string if it's a simple greeting, None otherwise
+        """
+        query_lower = query.lower().strip()
+
+        # Arabic greetings and introductions
+        arabic_patterns = {
+            # Greetings
+            ("مرحبا", "مرحباً", "اهلا", "أهلا", "السلام عليكم", "سلام"):
+                "مرحباً بك! 👋 أنا SAIA، مساعدك الذكي المتخصص في القانون السعودي للأحوال الشخصية. كيف يمكنني مساعدتك اليوم؟",
+
+            # Who are you
+            ("من انت", "من أنت", "ما اسمك", "عرف نفسك", "عرفني عنك", "من تكون"):
+                "أنا SAIA، مساعد ذكي متخصص في القانون السعودي للأحوال الشخصية. أستطيع مساعدتك في الإجابة على أسئلتك القانونية المتعلقة بالزواج، الطلاق، الحضانة، النفقة، وغيرها من مسائل الأحوال الشخصية. كيف يمكنني مساعدتك؟",
+
+            # What can you do
+            ("ماذا تستطيع", "ماذا يمكنك", "ما هي قدراتك", "كيف تساعدني", "ما الذي تقدمه"):
+                "أستطيع مساعدتك في:\n• الإجابة على أسئلتك حول قانون الأحوال الشخصية السعودي\n• توضيح الإجراءات القانونية للزواج والطلاق\n• شرح حقوق الحضانة والنفقة\n• تقديم معلومات عن الميراث والوصية\n• الإجابة على استفساراتك القانونية الأخرى\n\nما الذي تود معرفته؟",
+
+            # How are you
+            ("كيف حالك", "كيف الحال", "كيفك", "شلونك"):
+                "بخير، شكراً لسؤالك! 😊 كيف يمكنني مساعدتك اليوم في أمورك القانونية؟",
+
+            # Thank you
+            ("شكرا", "شكراً", "مشكور", "يعطيك العافية", "الله يعطيك العافية"):
+                "العفو! 😊 سعيد بمساعدتك. إذا كان لديك أي استفسار آخر، لا تتردد في السؤال.",
+        }
+
+        # English greetings
+        english_patterns = {
+            ("hello", "hi", "hey", "greetings"):
+                "Hello! 👋 I'm SAIA, your AI assistant specialized in Saudi Personal Status Law. How can I help you today?",
+
+            ("who are you", "what are you", "introduce yourself"):
+                "I'm SAIA, an AI assistant specialized in Saudi Personal Status Law. I can help you with questions about marriage, divorce, custody, alimony, and other personal status matters. How can I assist you?",
+
+            ("what can you do", "how can you help"):
+                "I can help you with:\n• Answering questions about Saudi Personal Status Law\n• Explaining legal procedures for marriage and divorce\n• Clarifying custody and alimony rights\n• Providing information about inheritance\n• Answering other legal inquiries\n\nWhat would you like to know?",
+
+            ("thank you", "thanks", "thx"):
+                "You're welcome! 😊 Feel free to ask if you have any other questions.",
+        }
+
+        # Check Arabic patterns
+        for patterns, response in arabic_patterns.items():
+            if any(pattern in query_lower for pattern in patterns):
+                return response
+
+        # Check English patterns
+        for patterns, response in english_patterns.items():
+            if any(pattern == query_lower or query_lower.startswith(pattern) for pattern in patterns):
+                return response
+
+        return None
+
     async def generate_response(
         self,
         query: str,
@@ -193,7 +255,25 @@ class RAGService:
             start_time = datetime.utcnow()
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
 
-            # Step 0: Get conversation context if conversation_id provided
+            # Step 0: Check for simple greetings/introductions (no RAG needed)
+            greeting_response = self._is_simple_greeting_or_intro(query)
+            if greeting_response:
+                processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+                logger.info("Simple greeting detected, responding directly", query=query[:50])
+
+                return {
+                    "response": greeting_response,
+                    "conversation_id": conversation_id,
+                    "confidence": 1.0,  # High confidence for direct responses
+                    "sources": [],
+                    "sources_count": 0,  # No sources for greetings
+                    "processing_time_ms": processing_time,
+                    "tokens_used": None,
+                    "preprocessing_steps": ["greeting_detection"],
+                    "conversation_aware": False
+                }
+
+            # Step 1: Get conversation context if conversation_id provided
             conversation_context = None
             if conversation_id:
                 conversation_context = await self.conversation_manager.get_conversation_context(
@@ -564,7 +644,7 @@ class RAGService:
 
         if language == "ar":
             if has_sources:
-                return f"""أنت SAIA، مساعد ذكي متخصص في خدمة العملاء. مهمتك تقديم إجابات دقيقة ومفيدة باللغة العربية فقط بناءً على السياق المقدم.
+                return f"""أنت SAIA، مساعد ذكي متخصص في القانون السعودي للأحوال الشخصية. مهمتك تقديم إجابات دقيقة ومفيدة باللغة العربية فقط بناءً على السياق المقدم.
 
 ⚠️ تعليمات صارمة - لا تخالفها أبداً:
 - لا تبدأ إجابتك بـ "أفهم قلقك" أو "أفهم مخاوفك" أو "I understand your concern"
@@ -578,24 +658,64 @@ class RAGService:
 
 فئة الاستفسار: {query_category}
 
+📋 تعليمات التنسيق والعرض (مهمة جداً):
+
+1. **استخدم النقاط والقوائم المرقمة:**
+   - عند ذكر شروط أو متطلبات متعددة، استخدم قائمة مرقمة (1. 2. 3.)
+   - عند ذكر خيارات أو حالات، استخدم نقاط (•)
+   - اترك سطراً فارغاً قبل وبعد كل قائمة
+
+2. **قسّم الإجابة إلى أقسام واضحة:**
+   - استخدم عناوين فرعية بخط عريض عند الحاجة (مثل: **الشروط:**، **الإجراءات:**، **الحقوق:**)
+   - اترك سطراً فارغاً بين الأقسام المختلفة
+   - ابدأ كل قسم جديد بسطر منفصل
+
+3. **تجنب الفقرات الطويلة:**
+   - لا تكتب أكثر من 3-4 أسطر في فقرة واحدة
+   - قسّم المعلومات الطويلة إلى نقاط أو فقرات قصيرة
+   - استخدم المسافات البيضاء لتحسين القراءة
+
+4. **عند الإجابة على أسئلة قانونية:**
+   - ابدأ بملخص قصير (سطر أو سطرين)
+   - ثم قدم التفاصيل في نقاط مرقمة
+   - اذكر أرقام المواد القانونية بوضوح (مثل: المادة 104)
+
+مثال على التنسيق الجيد:
+```
+يحق للزوجة طلب فسخ عقد الزواج في عدة حالات وفقاً للنظام السعودي:
+
+**الحالات التي تجيز الفسخ:**
+
+1. إذا حلف الزوج على عدم جماعها لمدة تزيد على أربعة أشهر (المادة 103)
+
+2. إذا امتنع عن جماعها لمدة تزيد على أربعة أشهر بلا عذر مشروع
+
+3. إذا ثبت أن الزوج قد أضر بها ضرراً يتعذر معه دوام العشرة بالمعروف (المادة 104)
+
+**الإجراءات المطلوبة:**
+• تقديم طلب للمحكمة المختصة
+• إثبات الضرر أو الحالة المطلوبة
+• انتظار حكم المحكمة
+```
+
 التعليمات المهمة جداً:
 1. استخدم المعلومات المتوفرة في السياق أعلاه لتقديم إجابة شاملة ومفيدة
 2. إذا وجدت معلومات ذات صلة في السياق، اعتمد عليها بالكامل في إجابتك
-3. قدم تفاصيل واضحة ومحددة من المعلومات المتوفرة
+3. قدم تفاصيل واضحة ومحددة من المعلومات المتوفرة بتنسيق منظم
 4. كن واثقاً في استخدام المعلومات الموجودة في السياق
 5. حافظ على نبرة مهذبة ومهنية
 6. أجب باللغة العربية فقط - لا تستخدم أي كلمات إنجليزية أبداً
 7. لا تقل "المعلومات غير متوفرة" إذا كانت موجودة في السياق
-8. كن مساعداً وقدم معلومات قيمة للمستخدم
-9. انهِ إجابتك بنقطة (.) ولا تضف أي نص إضافي
+8. كن مساعداً وقدم معلومات قيمة للمستخدم بتنسيق سهل القراءة
+9. استخدم النقاط والقوائم المرقمة والعناوين الفرعية لتحسين الوضوح
 10. لا تستخدم أي عبارات إنجليزية مطلقاً
 
 إرشادات خاصة بالفئة:
 {specific_instructions}
 
-مهم جداً: أجب باللغة العربية فقط. لا تضع أي نص إنجليزي في أي جزء من الإجابة.
+مهم جداً: أجب باللغة العربية فقط مع تنسيق واضح ومنظم. لا تضع أي نص إنجليزي في أي جزء من الإجابة.
 
-تذكر: استخدم المعلومات الموجودة في السياق أعلاه لتقديم إجابة شاملة ومفصلة. كن واثقاً في استخدام هذه المعلومات. أجب باللغة العربية فقط."""
+تذكر: استخدم المعلومات الموجودة في السياق أعلاه لتقديم إجابة شاملة ومفصلة بتنسيق منظم وسهل القراءة. أجب باللغة العربية فقط."""
             else:
                 return f"""أنت SAIA، مساعد ذكي متخصص في خدمة العملاء.
 
@@ -612,7 +732,7 @@ class RAGService:
 
 لا تضف أي نص آخر."""
         else:
-            return f"""You are SAIA, a helpful AI assistant for customer support. Your role is to provide accurate, helpful responses in English only based on the provided context.
+            return f"""You are SAIA, a helpful AI assistant specialized in Saudi Personal Status Law. Your role is to provide accurate, helpful responses in English only based on the provided context.
 
 ⚠️ STRICT INSTRUCTIONS - NEVER VIOLATE THESE:
 - NEVER start your response with "I understand your concern" or similar empathetic phrases
@@ -626,21 +746,62 @@ CONTEXT INFORMATION:
 
 QUERY CATEGORY: {query_category.title()}
 
+📋 FORMATTING INSTRUCTIONS (VERY IMPORTANT):
+
+1. **Use bullet points and numbered lists:**
+   - When listing conditions or requirements, use numbered lists (1. 2. 3.)
+   - When listing options or cases, use bullet points (•)
+   - Add blank lines before and after each list
+
+2. **Break response into clear sections:**
+   - Use bold subheadings when needed (e.g., **Conditions:**, **Procedures:**, **Rights:**)
+   - Add blank lines between different sections
+   - Start each new section on a new line
+
+3. **Avoid long paragraphs:**
+   - Keep paragraphs to 3-4 lines maximum
+   - Break long information into bullet points or short paragraphs
+   - Use white space to improve readability
+
+4. **When answering legal questions:**
+   - Start with a brief summary (1-2 lines)
+   - Then provide details in numbered points
+   - Clearly mention article numbers (e.g., Article 104)
+
+Example of good formatting:
+```
+A wife can request dissolution of marriage in several cases under Saudi law:
+
+**Cases that permit dissolution:**
+
+1. If the husband swears not to have intercourse with her for more than four months (Article 103)
+
+2. If he refrains from intercourse for more than four months without legitimate excuse
+
+3. If it is proven that the husband has harmed her in a way that makes it impossible to continue living together (Article 104)
+
+**Required procedures:**
+• Submit a request to the competent court
+• Prove the harm or required condition
+• Await the court's ruling
+```
+
 GENERAL INSTRUCTIONS:
 1. Answer the user's question using ONLY the information provided in the context above
 2. If the context doesn't contain enough information to answer the question, say so clearly
-3. Be concise but comprehensive in your response
+3. Be concise but comprehensive in your response with clear formatting
 4. If you reference specific information, you can mention it comes from the provided sources
 5. Maintain a helpful, professional tone
 6. If the user asks about something not covered in the context, politely explain that you don't have that information available
 7. Answer in English only - do not use any Arabic words
+8. Use bullet points, numbered lists, and subheadings to improve clarity
 
 CATEGORY-SPECIFIC GUIDANCE:
 {specific_instructions}
 
-IMPORTANT: Answer in English only. Do not add any Arabic text in any part of the response.
+IMPORTANT: Answer in English only with clear, organized formatting. Do not add any Arabic text in any part of the response.
 
-Remember: Only use the context provided above to answer questions. Do not use external knowledge beyond what's given in the context."""
+Remember: Only use the context provided above to answer questions with well-structured, easy-to-read formatting. Do not use external knowledge beyond what's given in the context."""
     
     async def search_documents(
         self,

@@ -14,11 +14,7 @@
     <!-- Header -->
     <header class="header">
         <div class="header-content">
-            <div class="logo">
-                <img src="#" alt="SAIA Logo" class="logo-image">
-                <h1>SAIA</h1>
-                <span class="subtitle">AI Assistant</span>
-            </div>
+           
             <div class="header-controls">
                 <button id="theme-toggle" class="btn-icon" title="Toggle theme">
                     <i class="fas fa-moon"></i>
@@ -50,8 +46,7 @@
                         <span class="timestamp">Just now</span>
                     </div>
                     <div class="message-text">
-                        👋 مرحباً! أنا مساعد مختص بالقانون السعودي الذكي المدعوم بتقنية RAG (الاسترجاع المعزز للتوليد).
-                        يمكنني مساعدتك في الإجابة على أسئلتك حول خدمات التأمين. اسألني أي شيء!
+                        👋 مرحباً! أنا مساعد مختص بالقانون السعودي الذكي!
                     </div>
                     <div class="message-footer">
                         <div class="system-info">
@@ -79,7 +74,7 @@
                 <div class="message-content">
                     <div class="message-header">
                         <i class="fas fa-robot"></i>
-                        <span class="sender">AI Assistant</span>
+                        <span class="sender">SAIA</span>
                     </div>
                     <div class="typing-animation">
                         <div class="typing-dots">
@@ -114,7 +109,7 @@
                         <span class="separator">•</span>
                         <span class="powered-by">
                             <i class="fas fa-bolt"></i>
-                            Powered by OpenAI
+                            Powered by SAIA
                         </span>
                     </div>
                     <div class="input-actions">
@@ -157,9 +152,9 @@
                         Show source citations
                     </label>
                 </div>
-                <div class="setting-group">
+                <div class="setting-group" style="display: none;">
                     <label>
-                        <input type="checkbox" id="show-confidence" checked>
+                        <input type="checkbox" id="show-confidence">
                         Show confidence scores
                     </label>
                 </div>
@@ -247,7 +242,7 @@
     <div id="loading-overlay" class="loading-overlay hidden">
         <div class="loading-spinner">
             <div class="spinner"></div>
-            <p>Initializing AI Assistant...</p>
+            <p>Initializing SAIA...</p>
         </div>
     </div>
 
@@ -409,7 +404,7 @@
                 messageDiv.className = `message ${type}-message${isError ? ' error' : ''}`;
 
                 const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                const senderName = type === 'user' ? 'You' : type === 'ai' ? 'AI Assistant' : 'System';
+                const senderName = type === 'user' ? 'You' : type === 'ai' ? 'SAIA' : 'System';
                 const icon = type === 'user' ? 'fa-user' : type === 'ai' ? 'fa-robot' : 'fa-info-circle';
 
                 let metaInfo = '';
@@ -419,10 +414,6 @@
                     metaInfo = `
                         <div class="message-footer">
                             <div class="message-info">
-                                <span class="info-item">
-                                    <i class="fas fa-chart-line"></i>
-                                    Confidence: ${confidence}
-                                </span>
                                 <span class="info-item">
                                     <i class="fas fa-clock"></i>
                                     ${processingTime}ms
