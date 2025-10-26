@@ -192,7 +192,7 @@ class RAGService:
         """
         Use AI to intelligently classify the query type.
 
-        This replaces hardcoded pattern matching with OpenAI's structured outputs,
+        This replaces hardcoded pattern matching with AI-powered classification,
         allowing the LLM to understand query intent naturally.
 
         Args:
@@ -202,26 +202,44 @@ class RAGService:
             QueryClassification with type and reasoning
         """
         try:
-            classification_prompt = f"""Classify this user query into one of two categories:
+            classification_prompt = f"""Classify this user query into one of two categories and respond in JSON format:
 
 1. **CONVERSATIONAL**: Greetings, introductions, "what can you do", "how can you help", "who are you", "thank you", or general chitchat
 2. **DOMAIN_SPECIFIC**: Questions about Saudi law, legal procedures, custody, marriage, divorce, inheritance, or any legal topic
 
 User Query: "{query}"
 
-Classify the query and provide brief reasoning."""
+Respond with JSON in this exact format:
+{{
+  "query_type": "conversational" or "domain_specific",
+  "reasoning": "brief explanation"
+}}"""
 
-            completion = await self.openai_client.beta.chat.completions.parse(
+            # Use the underlying OpenAI client (not the wrapper)
+            completion = self.openai_client.client.chat.completions.create(
                 model="gpt-4o-mini",  # Fast and cost-effective for classification
                 messages=[
-                    {"role": "system", "content": "You are a query classifier for a Saudi legal AI assistant."},
+                    {"role": "system", "content": "You are a query classifier for a Saudi legal AI assistant. Always respond with valid JSON."},
                     {"role": "user", "content": classification_prompt}
                 ],
-                response_format=QueryClassification,
-                temperature=0.0  # Deterministic classification
+                temperature=0.0,  # Deterministic classification
+                response_format={"type": "json_object"}  # Force JSON response
             )
 
-            classification = completion.choices[0].message.parsed
+            # Parse JSON response
+            import json
+            response_text = completion.choices[0].message.content
+            classification_data = json.loads(response_text)
+
+            # Map to enum
+            query_type_str = classification_data.get("query_type", "domain_specific").lower()
+            query_type = QueryType.CONVERSATIONAL if query_type_str == "conversational" else QueryType.DOMAIN_SPECIFIC
+
+            classification = QueryClassification(
+                query_type=query_type,
+                reasoning=classification_data.get("reasoning", "AI classification")
+            )
+
             logger.info(
                 "Query classified",
                 query=query[:50],
@@ -262,7 +280,8 @@ When users ask conversational questions (greetings, "what can you do", "who are 
 - Use appropriate language (Arabic or English) based on the user's query
 - Add relevant emojis for warmth (👋 😊)"""
 
-            completion = await self.openai_client.chat.completions.create(
+            # Use the underlying OpenAI client (not the wrapper)
+            completion = self.openai_client.client.chat.completions.create(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
