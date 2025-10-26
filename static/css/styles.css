@@ -291,6 +291,17 @@ body {
     white-space: normal; /* Changed from pre-wrap to allow HTML rendering */
 }
 
+/* RTL support for Arabic text */
+.message-text[dir="rtl"] {
+    direction: rtl;
+    text-align: right;
+}
+
+.message-text[dir="ltr"] {
+    direction: ltr;
+    text-align: left;
+}
+
 /* Markdown formatting styles for AI responses */
 .message-text p {
     margin: 0.5rem 0;

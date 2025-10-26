@@ -401,6 +401,17 @@
                 }
             }
 
+            // Detect if text is primarily Arabic (RTL)
+            isArabicText(text) {
+                // Remove HTML tags and markdown syntax for detection
+                const cleanText = text.replace(/<[^>]*>/g, '').replace(/[*_#`\[\]]/g, '');
+                // Arabic Unicode range: \u0600-\u06FF
+                const arabicChars = cleanText.match(/[\u0600-\u06FF]/g);
+                const totalChars = cleanText.replace(/\s/g, '').length;
+                // If more than 30% of characters are Arabic, treat as RTL
+                return arabicChars && totalChars > 0 && (arabicChars.length / totalChars) > 0.3;
+            }
+
             addMessage(type, text, data = null, isError = false) {
                 const messageDiv = document.createElement('div');
                 messageDiv.className = `message ${type}-message${isError ? ' error' : ''}`;
@@ -408,6 +419,9 @@
                 const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
                 const senderName = type === 'user' ? 'You' : type === 'ai' ? 'SAIA' : 'System';
                 const icon = type === 'user' ? 'fa-user' : type === 'ai' ? 'fa-robot' : 'fa-info-circle';
+
+                // Detect text direction
+                const textDirection = this.isArabicText(text) ? 'rtl' : 'ltr';
 
                 // Convert markdown to HTML for AI responses
                 let formattedText = text;
@@ -450,7 +464,7 @@
                             <span class="sender">${senderName}</span>
                             <span class="timestamp">${timestamp}</span>
                         </div>
-                        <div class="message-text">${formattedText}</div>
+                        <div class="message-text" dir="${textDirection}">${formattedText}</div>
                         ${metaInfo}
                     </div>
                 `;
