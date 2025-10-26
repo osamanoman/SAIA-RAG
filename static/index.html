@@ -9,6 +9,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Marked.js for Markdown to HTML conversion -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body>
     <!-- Header -->
@@ -407,6 +409,24 @@
                 const senderName = type === 'user' ? 'You' : type === 'ai' ? 'SAIA' : 'System';
                 const icon = type === 'user' ? 'fa-user' : type === 'ai' ? 'fa-robot' : 'fa-info-circle';
 
+                // Convert markdown to HTML for AI responses
+                let formattedText = text;
+                if (type === 'ai' && typeof marked !== 'undefined') {
+                    try {
+                        // Configure marked for better Arabic and formatting support
+                        marked.setOptions({
+                            breaks: true,        // Convert \n to <br>
+                            gfm: true,          // GitHub Flavored Markdown
+                            headerIds: false,   // Don't add IDs to headers
+                            mangle: false       // Don't escape autolinked email addresses
+                        });
+                        formattedText = marked.parse(text);
+                    } catch (e) {
+                        console.error('Markdown parsing error:', e);
+                        formattedText = text; // Fallback to plain text
+                    }
+                }
+
                 let metaInfo = '';
                 if (data && type === 'ai') {
                     const confidence = data.confidence ? `${(data.confidence * 100).toFixed(0)}%` : 'N/A';
@@ -430,7 +450,7 @@
                             <span class="sender">${senderName}</span>
                             <span class="timestamp">${timestamp}</span>
                         </div>
-                        <div class="message-text">${text}</div>
+                        <div class="message-text">${formattedText}</div>
                         ${metaInfo}
                     </div>
                 `;
