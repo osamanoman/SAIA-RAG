@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Wazen AI Assistant</title>
-    <link rel="stylesheet" href="/static/css/styles.css?v=wazen-2024">
+    <title>SAIA - Saudi AI Law Assistant</title>
+    <link rel="stylesheet" href="/static/css/styles.css?v=saia-2025">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -15,8 +15,8 @@
     <header class="header">
         <div class="header-content">
             <div class="logo">
-                <img src="/static/images/wazen-logo.png?v=wazen-2024" alt="Wazen Logo" class="logo-image">
-                <h1>Wazen</h1>
+                <img src="#" alt="SAIA Logo" class="logo-image">
+                <h1>SAIA</h1>
                 <span class="subtitle">AI Assistant</span>
             </div>
             <div class="header-controls">
@@ -46,11 +46,11 @@
                 <div class="message-content">
                     <div class="message-header">
                         <i class="fas fa-robot"></i>
-                        <span class="sender">Wazen Assistant</span>
+                        <span class="sender">SAIA Assistant</span>
                         <span class="timestamp">Just now</span>
                     </div>
                     <div class="message-text">
-                        👋 مرحباً! أنا مساعد وازن الذكي المدعوم بتقنية RAG (الاسترجاع المعزز للتوليد).
+                        👋 مرحباً! أنا مساعد مختص بالقانون السعودي الذكي المدعوم بتقنية RAG (الاسترجاع المعزز للتوليد).
                         يمكنني مساعدتك في الإجابة على أسئلتك حول خدمات التأمين. اسألني أي شيء!
                     </div>
                     <div class="message-footer">
@@ -256,8 +256,8 @@
 
     <!-- Scripts -->
     <script>
-        // Simple, working Wazen Web UI
-        class WazenApp {
+        // Simple, working SAIA Web UI
+        class SAIAApp {
             constructor() {
                 this.apiBaseUrl = '';
                 this.conversationId = `web_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -562,7 +562,7 @@
                                 </div>
                             </div>
                             <div class="document-actions">
-                                <button class="btn-danger" onclick="wazenApp.deleteDocument('${doc.document_id}', '${doc.title || 'Untitled'}')">
+                                <button class="btn-danger" onclick="saiaApp.deleteDocument('${doc.document_id}', '${doc.title || 'Untitled'}')">
                                     <i class="fas fa-trash"></i>
                                 </button>
                             </div>
@@ -617,7 +617,7 @@
 
         // Initialize when DOM is ready
         document.addEventListener('DOMContentLoaded', () => {
-            window.wazenApp = new WazenApp();
+            window.saiaApp = new SAIAApp();
         });
     </script>
 </body>

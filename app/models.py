@@ -239,6 +239,13 @@ class SourceDocument(BaseModel):
     relevance_score: float = Field(..., ge=0.0, le=1.0, description="Relevance score")
     text_excerpt: Optional[str] = Field(None, max_length=500, description="Relevant text excerpt")
 
+    # Article metadata fields (for legal documents)
+    article_number: Optional[str] = Field(None, description="Article number (e.g., '51' or 'الحادية والخمسون')")
+    article_title: Optional[str] = Field(None, max_length=200, description="Article title or heading")
+    legal_topic: Optional[str] = Field(None, max_length=50, description="Legal topic category (e.g., 'alimony', 'custody')")
+    book: Optional[str] = Field(None, max_length=100, description="Book/section name (e.g., 'Marriage', 'Inheritance')")
+    chapter: Optional[str] = Field(None, max_length=100, description="Chapter/subsection name")
+
     @field_validator("relevance_score")
     @classmethod
     def validate_relevance_score(cls, v: float) -> float:
@@ -266,6 +273,8 @@ class ChatResponse(BaseResponse):
     sources: List[SourceDocument] = Field(default=[], description="Source documents used")
     processing_time_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
     tokens_used: Optional[int] = Field(None, ge=0, description="Tokens used in generation")
+    preprocessing_steps: Optional[List[str]] = Field(default=None, description="Query preprocessing steps applied")
+    conversation_aware: Optional[bool] = Field(default=False, description="Whether conversation context was used")
 
 
 # === SEARCH MODELS ===

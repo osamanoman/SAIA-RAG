@@ -63,7 +63,7 @@ def create_application() -> FastAPI:
     # Configure app based on environment
     app_config = {
         "title": settings.app_name,
-        "description": "Wazen AI Assistant - Insurance services support powered by RAG",
+        "description": "SAIA - Saudi AI Law Assistant - Legal consultation powered by RAG",
         "version": settings.app_version,
     }
 
@@ -321,7 +321,7 @@ async def root(settings: Settings = Depends(get_settings)) -> Dict[str, Any]:
 @app.get("/ui", response_class=HTMLResponse)
 async def web_ui():
     """
-    Serve the web UI for Wazen AI Assistant chat interface.
+    Serve the web UI for SAIA - Saudi AI Law Assistant chat interface.
 
     Returns:
         HTML response with the chat interface
@@ -831,7 +831,9 @@ async def chat(
             confidence=rag_result["confidence"],
             sources=rag_result["sources"],
             processing_time_ms=total_time_ms,
-            tokens_used=rag_result["tokens_used"]
+            tokens_used=rag_result["tokens_used"],
+            preprocessing_steps=rag_result.get("preprocessing_steps"),
+            conversation_aware=rag_result.get("conversation_aware", False)
         )
         logger.info("ChatResponse created successfully")
 

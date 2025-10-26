@@ -21,6 +21,7 @@ from .query_processor import get_query_processor
 # ESCALATION SYSTEM REMOVED
 from .response_formatter import get_response_formatter
 from .models import SourceDocument
+from .conversation_memory import get_conversation_memory_manager, MessageType
 
 # Get logger
 logger = structlog.get_logger()
@@ -46,12 +47,13 @@ class RAGService:
         self.query_processor = get_query_processor()
         # ESCALATION MANAGER REMOVED
         self.response_formatter = get_response_formatter()
+        self.conversation_manager = get_conversation_memory_manager()
 
         # Simple in-memory cache for frequent queries
         self._query_cache = {}
         self._cache_max_size = 100
 
-        logger.info("RAG service initialized", cache_max_size=self._cache_max_size)
+        logger.info("RAG service initialized with conversation management", cache_max_size=self._cache_max_size)
     
     async def ingest_document(
         self,
@@ -191,11 +193,25 @@ class RAGService:
             start_time = datetime.utcnow()
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
 
+            # Step 0: Get conversation context if conversation_id provided
+            conversation_context = None
+            if conversation_id:
+                conversation_context = await self.conversation_manager.get_conversation_context(
+                    conversation_id=conversation_id,
+                    include_messages=True
+                )
+                logger.info(
+                    "Retrieved conversation context",
+                    conversation_id=conversation_id,
+                    message_count=len(conversation_context.get("messages", [])) if conversation_context else 0
+                )
+
             # Step 1: Process and enhance query if enabled (CONSISTENT CHANNEL)
             if self.settings.enable_query_enhancement:
                 enhanced_query_result = await self.query_processor.process_query(
                     query=query,
-                    channel="whatsapp"  # Use consistent WhatsApp channel
+                    channel="whatsapp",  # Use consistent WhatsApp channel
+                    conversation_context=conversation_context  # Pass conversation context
                 )
                 processed_query = enhanced_query_result.enhanced_query
                 query_metadata = {
@@ -203,12 +219,17 @@ class RAGService:
                     "enhanced_query": processed_query,
                     "query_category": enhanced_query_result.query_type.category,
                     "query_intent": enhanced_query_result.query_type.intent,
-                    "preprocessing_steps": enhanced_query_result.preprocessing_applied
+                    "preprocessing_steps": enhanced_query_result.preprocessing_applied,
+                    "conversation_aware": conversation_context is not None
                 }
-                logger.info("Query enhanced", **query_metadata)
+                logger.info("Query enhanced with conversation context", **query_metadata)
             else:
                 processed_query = query
-                query_metadata = {"original_query": query, "enhanced_query": query}
+                query_metadata = {
+                    "original_query": query,
+                    "enhanced_query": query,
+                    "conversation_aware": False
+                }
 
             # Check cache with processed query
             cache_key = self._get_cache_key(processed_query, max_context_chunks, confidence_threshold)
@@ -247,10 +268,16 @@ class RAGService:
                         chunk_id=result["chunk_id"],
                         title=result.get("title"),
                         relevance_score=float(result["score"]),  # Ensure it's a float
-                        text_excerpt=result["text"][:200] + "..." if len(result["text"]) > 200 else result["text"]
+                        text_excerpt=result["text"][:200] + "..." if len(result["text"]) > 200 else result["text"],
+                        # Article metadata (for legal documents)
+                        article_number=result.get("article_number"),
+                        article_title=result.get("article_title"),
+                        legal_topic=result.get("legal_topic"),
+                        book=result.get("book"),
+                        chapter=result.get("chapter")
                     )
                     sources.append(source)
-                    logger.info(f"Created source {i}", source_type=type(source))
+                    logger.info(f"Created source {i}", source_type=type(source), article_number=result.get("article_number"))
 
                 except Exception as e:
                     logger.error(f"Failed to create source {i}", error=str(e), result_keys=list(result.keys()))
@@ -365,6 +392,64 @@ class RAGService:
 
             # Cache the response for future use
             self._cache_response(cache_key, result)
+
+            # Store conversation messages if conversation_id provided
+            if conversation_id:
+                try:
+                    # Check if conversation exists, if not create it directly
+                    existing_conversation = await self.conversation_manager.get_conversation(conversation_id)
+                    if not existing_conversation:
+                        # Create conversation directly with the provided conversation_id
+                        from .conversation_memory import ConversationContext, ConversationState
+                        conversation = ConversationContext(
+                            conversation_id=conversation_id,
+                            user_id=None,
+                            session_id=conversation_id,
+                            state=ConversationState.ACTIVE
+                        )
+                        conversation.language_preference = detected_language
+                        self.conversation_manager.active_conversations[conversation_id] = conversation
+                        logger.info("Created new conversation", conversation_id=conversation_id)
+
+                    # Store user query
+                    await self.conversation_manager.add_message(
+                        conversation_id=conversation_id,
+                        content=query,
+                        message_type=MessageType.USER_QUERY,
+                        metadata={
+                            "enhanced_query": processed_query,
+                            "query_category": query_metadata.get("query_category"),
+                            "query_intent": query_metadata.get("query_intent")
+                        }
+                    )
+
+                    # Store AI response
+                    await self.conversation_manager.add_message(
+                        conversation_id=conversation_id,
+                        content=final_response,
+                        message_type=MessageType.AI_RESPONSE,
+                        metadata={
+                            "confidence": confidence,
+                            "sources_count": len(sources),
+                            "article_numbers": [s.article_number for s in sources if s.article_number]
+                        },
+                        confidence_score=confidence,
+                        sources=[s.document_id for s in sources]
+                    )
+
+                    logger.info(
+                        "Stored conversation messages",
+                        conversation_id=conversation_id,
+                        query_length=len(query),
+                        response_length=len(final_response)
+                    )
+                except Exception as conv_error:
+                    # Don't fail the request if conversation storage fails
+                    logger.error(
+                        "Failed to store conversation messages",
+                        conversation_id=conversation_id,
+                        error=str(conv_error)
+                    )
 
             return result
             

@@ -84,22 +84,67 @@ class QueryProcessor:
         """
         start_time = datetime.utcnow()
         preprocessing_steps = []
-        
+        original_query = query
+
         try:
+            # Step 0: Reformulate with conversation context if follow-up
+            logger.info(
+                "Processing query with conversation context",
+                has_context=bool(conversation_context),
+                query_length=len(query.split()),
+                query=query[:50]
+            )
+
+            if conversation_context:
+                logger.info(
+                    "Conversation context details",
+                    context_keys=list(conversation_context.keys()) if conversation_context else [],
+                    message_count=len(conversation_context.get("messages", [])) + len(conversation_context.get("recent_messages", []))
+                )
+
+                case_facts = self._extract_case_facts(conversation_context)
+                logger.info(
+                    "Case facts extracted",
+                    has_facts=bool(case_facts),
+                    fact_keys=list(case_facts.keys()) if case_facts else []
+                )
+
+                is_follow_up = self._is_follow_up_query(query)
+                logger.info(
+                    "Follow-up detection",
+                    is_follow_up=is_follow_up,
+                    query=query
+                )
+
+                if case_facts and is_follow_up:
+                    query = await self._reformulate_with_context(query, case_facts)
+                    preprocessing_steps.append("context_reformulation")
+                    logger.info(
+                        "Query reformulated with conversation context",
+                        original=original_query,
+                        reformulated=query
+                    )
+                else:
+                    logger.info(
+                        "Skipping reformulation",
+                        has_case_facts=bool(case_facts),
+                        is_follow_up=is_follow_up
+                    )
+
             # Step 1: Clean and normalize query
             cleaned_query = self._clean_query(query)
             if cleaned_query != query:
                 preprocessing_steps.append("cleaning")
-            
+
             # Step 2: Classify query type
             query_type = await self._classify_query(cleaned_query)
             preprocessing_steps.append("classification")
-            
+
             # Step 3: Apply channel-specific preprocessing
             channel_enhanced = self._apply_channel_preprocessing(cleaned_query, channel)
             if channel_enhanced != cleaned_query:
                 preprocessing_steps.append("channel_optimization")
-            
+
             # Step 4: Apply support-specific enhancements
             enhanced_query = await self._enhance_for_support(channel_enhanced, query_type)
             if enhanced_query != channel_enhanced:
@@ -114,9 +159,9 @@ class QueryProcessor:
             
             end_time = datetime.utcnow()
             processing_time_ms = int((end_time - start_time).total_seconds() * 1000)
-            
+
             result = EnhancedQuery(
-                original_query=query,
+                original_query=original_query,  # Use original, not reformulated
                 enhanced_query=enhanced_query,
                 query_type=query_type,
                 preprocessing_applied=preprocessing_steps,
@@ -305,6 +350,187 @@ class QueryProcessor:
         except Exception as e:
             logger.warning("Query expansion failed", error=str(e))
             return query  # Fallback to original
+
+    def _extract_case_facts(self, conversation_context: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Extract case facts from conversation history.
+
+        Args:
+            conversation_context: Conversation context with message history
+
+        Returns:
+            Dictionary with case facts: plaintiff, defendant, key_issues, etc.
+        """
+        # Check for both "messages" and "recent_messages" keys
+        messages = conversation_context.get("messages") or conversation_context.get("recent_messages") if conversation_context else None
+
+        if not messages:
+            return {}
+
+        # Get first user message (usually contains case description)
+        # Handle both "message_type" and "type" keys
+        first_user_message = next(
+            (msg for msg in messages if msg.get("message_type") == "user_query" or msg.get("type") == "user_query"),
+            None
+        )
+
+        if not first_user_message:
+            return {}
+
+        first_query = first_user_message.get("content", "")
+
+        # Extract entities using simple pattern matching
+        case_facts = {
+            "first_query": first_query,
+            "query_length": len(first_query),
+            "message_count": len(messages)
+        }
+
+        # Look for plaintiff/defendant patterns
+        if "زوجة" in first_query or "المدعية" in first_query:
+            case_facts["plaintiff_type"] = "wife"
+        if "زوج" in first_query or "المدعى عليه" in first_query:
+            case_facts["defendant_type"] = "husband"
+
+        # Extract key issues
+        key_issues = []
+        issue_patterns = {
+            "إدمان": "drug_addiction",
+            "اعتداء": "assault",
+            "ضرب": "physical_abuse",
+            "إهمال": "neglect",
+            "نفقة": "alimony",
+            "حضانة": "custody",
+            "فسخ": "dissolution",
+            "طلاق": "divorce"
+        }
+
+        for arabic_term, english_term in issue_patterns.items():
+            if arabic_term in first_query:
+                key_issues.append(english_term)
+
+        case_facts["key_issues"] = key_issues
+
+        logger.info(
+            "Extracted case facts",
+            plaintiff_type=case_facts.get("plaintiff_type"),
+            defendant_type=case_facts.get("defendant_type"),
+            key_issues=key_issues
+        )
+
+        return case_facts
+
+    def _is_follow_up_query(self, query: str) -> bool:
+        """
+        Detect if query is a follow-up (short, vague, uses pronouns).
+
+        Examples of follow-ups:
+        - "ماذا عن النفقة" (What about alimony?)
+        - "والحضانة؟" (And custody?)
+        - "في هذه القضية" (In this case)
+
+        Args:
+            query: User query to check
+
+        Returns:
+            True if query appears to be a follow-up
+        """
+        # Short queries are likely follow-ups
+        if len(query.split()) <= 5:
+            # Check for follow-up indicators
+            follow_up_indicators = [
+                "ماذا عن",  # What about
+                "والحضانة",  # And custody
+                "والنفقة",  # And alimony
+                "في هذه القضية",  # In this case
+                "في القضية",  # In the case
+                "أيضا",  # Also
+                "كذلك",  # As well
+                "بالنسبة",  # Regarding
+                "وماذا",  # And what
+            ]
+
+            for indicator in follow_up_indicators:
+                if indicator in query:
+                    logger.info("Detected follow-up query", query=query, indicator=indicator)
+                    return True
+
+        return False
+
+    async def _reformulate_with_context(
+        self,
+        query: str,
+        case_facts: Dict[str, Any]
+    ) -> str:
+        """
+        Reformulate follow-up query with case context.
+
+        Examples:
+        - "ماذا عن النفقة" → "ما هي حقوق الزوجة في النفقة في قضية إدمان الزوج وإهماله؟"
+        - "What about custody?" → "What are the wife's custody rights given husband's drug addiction?"
+
+        Args:
+            query: Original follow-up query
+            case_facts: Extracted case facts from conversation history
+
+        Returns:
+            Reformulated query with case context
+        """
+        try:
+            # Build context string from case facts
+            context_parts = []
+
+            if case_facts.get("plaintiff_type"):
+                context_parts.append(f"Plaintiff: {case_facts['plaintiff_type']}")
+
+            if case_facts.get("defendant_type"):
+                context_parts.append(f"Defendant: {case_facts['defendant_type']}")
+
+            if case_facts.get("key_issues"):
+                context_parts.append(f"Key issues: {', '.join(case_facts['key_issues'])}")
+
+            context_string = "; ".join(context_parts)
+
+            # Use LLM to reformulate
+            reformulation_prompt = f"""You are a legal query reformulation assistant.
+
+Original follow-up query: {query}
+
+Case context: {context_string}
+
+Original case description: {case_facts.get('first_query', '')[:500]}
+
+Task: Reformulate the follow-up query to be specific and include relevant case context.
+The reformulated query should be a complete, standalone question that includes:
+1. The specific legal topic from the follow-up (e.g., alimony, custody)
+2. Relevant case facts (e.g., drug addiction, neglect)
+3. The parties involved (e.g., wife, husband)
+
+Respond with ONLY the reformulated query in the same language as the original query.
+Do not add explanations or additional text."""
+
+            messages = [{"role": "user", "content": reformulation_prompt}]
+
+            result = await self.openai_client.chat_completion(
+                messages=messages,
+                temperature=0.3,
+                max_tokens=200
+            )
+
+            reformulated = result["content"].strip()
+
+            logger.info(
+                "Query reformulated with context",
+                original=query,
+                reformulated=reformulated,
+                context_used=bool(context_string)
+            )
+
+            return reformulated
+
+        except Exception as e:
+            logger.error("Query reformulation failed", error=str(e))
+            return query  # Fallback to original query
 
 
 # Global instance
