@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     
     # === CORE APPLICATION SETTINGS ===
     app_name: str = Field(
-        default="Wazen AI Assistant",
+        default="SAIA - Saudi AI Law Assistant",
         description="Application name"
     )
     app_version: str = Field(

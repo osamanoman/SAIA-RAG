@@ -145,7 +145,7 @@ POST /chat
 **Request**:
 ```json
 {
-  "message": "What insurance services does Wazen provide?",
+  "message": "What are the conditions for child custody according to Saudi law?",
   "conversation_id": "test-001"
 }
 ```
@@ -155,7 +155,7 @@ POST /chat
 {
   "status": "success",
   "timestamp": "2025-08-24T09:20:30.753818",
-  "response": "Wazen provides comprehensive car insurance services in Saudi Arabia, which include:\n\n1. Vehicle protection\n2. Accident coverage\n3. Theft protection\n4. 24/7 customer support\n\nThey offer competitive rates and fast claim processing for all types of vehicles, including sedans, SUVs, and motorcycles. The coverage options include third-party liability, comprehensive coverage, and collision protection.",
+  "response": "According to Saudi Personal Status Law, custody (الحضانة) conditions include:\n\n1. Full legal capacity (كمال الأهلية)\n2. Ability to raise, protect and care for the child\n3. Freedom from dangerous infectious diseases\n4. Safety and proper environment\n\nThe law prioritizes the best interests of the child, with custody typically granted to the mother for young children, as specified in Articles 124-135 of the Personal Status Law.",
   "conversation_id": "test-001",
   "confidence": 0.0,
   "sources": [],
@@ -188,14 +188,14 @@ POST /search
     {
       "chunk_id": "b33a72ac-734a-4a6e-8682-ca72fc48f084_chunk_0",
       "document_id": "b33a72ac-734a-4a6e-8682-ca72fc48f084",
-      "title": "Wazen Insurance Services",
-      "content": "Wazen provides comprehensive car insurance services...",
+      "title": "SAIA",
+      "content": "Article 124: Custody is the protection of a person who cannot take care of themselves...",
       "score": 0.43825454,
       "metadata": {
-        "title": "Wazen Insurance Services",
-        "category": "insurance",
-        "tags": ["wazen", "insurance", "cars", "saudi arabia"],
-        "author": "Wazen Team"
+        "title": "Saudi Personal Status Law",
+        "category": "family_law",
+        "tags": ["custody", "family law", "saudi arabia", "personal status"],
+        "author": "SAIA Legal Team"
       }
     }
   ],

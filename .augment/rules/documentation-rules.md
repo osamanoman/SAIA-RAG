@@ -1,3 +1,7 @@
+---
+type: "always_apply"
+---
+
 # SAIA-RAG Documentation Rules
 
 **CRITICAL**: These documentation rules are MANDATORY for all AI agents working on the SAIA-RAG project.

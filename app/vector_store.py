@@ -518,7 +518,11 @@ class QdrantVectorStore:
             formatted_results = []
             for result in results:
                 if result["payload"]:
+                    # Preserve id for RRF fusion - use chunk_id as fallback
+                    result_id = result.get("id") or result["payload"].get("chunk_id")
+
                     formatted_result = {
+                        "id": result_id,  # CRITICAL: Preserve id for RRF fusion
                         "chunk_id": result["payload"].get("chunk_id"),
                         "document_id": result["payload"].get("document_id"),
                         "text": result["payload"].get("text", ""),
@@ -526,6 +530,12 @@ class QdrantVectorStore:
                         "chunk_index": result["payload"].get("chunk_index", 0),
                         "title": result["payload"].get("title"),
                         "category": result["payload"].get("category"),
+                        # CRITICAL: Preserve article metadata for legal documents
+                        "article_number": result["payload"].get("article_number"),
+                        "article_title": result["payload"].get("article_title"),
+                        "legal_topic": result["payload"].get("legal_topic"),
+                        "book": result["payload"].get("book"),
+                        "chapter": result["payload"].get("chapter"),
                         "metadata": result["payload"].get("metadata", {}),
                         "indexed_at": result["payload"].get("indexed_at")
                     }

@@ -30,7 +30,7 @@
 | سياسة الخصوصية | 17 | Arabic | Policy |
 | السياسات و الشروط و الأحكام | 5 | Arabic | Terms |
 | خدمات وازن | 1 | Arabic | Services |
-| Wazen Insurance Services | 1 | English | Services |
+| SAIA | 1 | English | Services |
 | عن وازن | 1 | Arabic | About |
 
 ### **Content Tags Analysis**
