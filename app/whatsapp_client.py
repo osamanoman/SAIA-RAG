@@ -330,7 +330,21 @@ class WhatsAppClient:
                 logger.warning("Value is not a dictionary", value_type=type(value).__name__)
                 return None
 
-            # Step 3: Check for messages
+            # Step 3: Extract and validate phone_number_id from metadata
+            metadata = value.get("metadata", {})
+            incoming_phone_number_id = metadata.get("phone_number_id")
+
+            # CRITICAL: Only process messages for the configured phone number
+            if incoming_phone_number_id != self.phone_number_id:
+                logger.info("Message for different phone number - ignoring",
+                           incoming_phone_id=incoming_phone_number_id,
+                           configured_phone_id=self.phone_number_id)
+                return None
+
+            logger.info("Phone number ID validated",
+                       phone_number_id=incoming_phone_number_id)
+
+            # Step 4: Check for messages
             if "messages" not in value:
                 logger.info("No messages in value", value_keys=list(value.keys()))
                 return None
@@ -345,13 +359,13 @@ class WhatsAppClient:
                 logger.warning("Message is not a dictionary", message_type=type(message).__name__)
                 return None
 
-            # Step 4: Check message type
+            # Step 5: Check message type
             message_type = message.get("type")
             if message_type != "text":
                 logger.info("Message is not text type", message_type=message_type)
                 return None
 
-            # Step 5: Extract message data
+            # Step 6: Extract message data
             text_data = message.get("text", {})
             if not isinstance(text_data, dict):
                 logger.warning("Text data is not a dictionary", text_data_type=type(text_data).__name__)
