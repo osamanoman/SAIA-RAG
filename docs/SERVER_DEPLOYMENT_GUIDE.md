@@ -62,6 +62,7 @@ docker rm saia-law-api 2>/dev/null || true
 docker run -d \
   --name saia-law-api \
   --network saia-law-network \
+  --link saia-law-qdrant:qdrant \
   -p 8001:8000 \
   --env-file /opt/saia/.env.prod \
   --restart unless-stopped \
@@ -124,6 +125,7 @@ docker rm saia-law-api 2>/dev/null || true
 docker run -d \
   --name saia-law-api \
   --network saia-law-network \
+  --link saia-law-qdrant:qdrant \
   -p 8001:8000 \
   --env-file /opt/saia/.env.prod \
   --restart unless-stopped \
