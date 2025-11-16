@@ -291,7 +291,7 @@ class WhatsAppClient:
             webhook_data: Raw webhook data from WhatsApp
 
         Returns:
-            Parsed message data or None if not a text message
+            Parsed message data or None if not a text message or status update
         """
         try:
             logger.info("Parsing WhatsApp webhook message",
@@ -344,7 +344,14 @@ class WhatsAppClient:
             logger.info("Phone number ID validated",
                        phone_number_id=incoming_phone_number_id)
 
-            # Step 4: Check for messages
+            # Step 4: CRITICAL - Filter out status updates (delivery/read receipts)
+            # Status updates come in "statuses" field, not "messages"
+            if "statuses" in value:
+                logger.info("Status update webhook received - ignoring",
+                           status_count=len(value.get("statuses", [])))
+                return None
+
+            # Step 5: Check for messages
             if "messages" not in value:
                 logger.info("No messages in value", value_keys=list(value.keys()))
                 return None
@@ -359,13 +366,33 @@ class WhatsAppClient:
                 logger.warning("Message is not a dictionary", message_type=type(message).__name__)
                 return None
 
-            # Step 5: Check message type
+            # Step 6: CRITICAL - Filter out OUTGOING messages (messages sent BY the bot)
+            # When the bot sends a message, Meta sends a webhook with the outgoing message
+            # We must ignore these to prevent infinite loops
+            # Outgoing messages have a "context" field or the "from" matches our business number
+
+            # Check if this is an outgoing message (sent by the bot)
+            # Outgoing messages typically have a "context" field
+            if "context" in message:
+                logger.info("Outgoing message detected (has context field) - ignoring",
+                           message_id=message.get("id"))
+                return None
+
+            # Additional check: if the message has a "from" field that matches our phone_number_id
+            # This shouldn't happen, but it's a safety check
+            message_from = message.get("from")
+            if message_from == self.phone_number_id:
+                logger.info("Outgoing message detected (from matches phone_number_id) - ignoring",
+                           message_id=message.get("id"))
+                return None
+
+            # Step 7: Check message type
             message_type = message.get("type")
             if message_type != "text":
                 logger.info("Message is not text type", message_type=message_type)
                 return None
 
-            # Step 6: Extract message data
+            # Step 8: Extract message data
             text_data = message.get("text", {})
             if not isinstance(text_data, dict):
                 logger.warning("Text data is not a dictionary", text_data_type=type(text_data).__name__)
@@ -392,7 +419,7 @@ class WhatsAppClient:
                 "phone_number": message.get("from")
             }
 
-            logger.info("WhatsApp message parsed successfully",
+            logger.info("WhatsApp INCOMING message parsed successfully",
                         message_id=parsed_message["message_id"],
                         from_number=parsed_message["from"],
                         text_length=len(parsed_message["text"]))

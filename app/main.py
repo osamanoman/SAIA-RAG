@@ -5,7 +5,7 @@ Main application entry point with health checks, error handling, and logging.
 Follows clean architecture patterns with proper dependency injection.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 import time
 import asyncio
@@ -29,6 +29,12 @@ FeedbackRequest, FeedbackResponse, AdminStatsResponse, AdminHealthResponse,
 AdminConfigResponse, AdminLogsResponse, SystemStats, VectorStoreStats,
 SystemHealthDetail, SystemConfigItem, LogEntry
 )
+
+# === IDEMPOTENCY TRACKING ===
+# In-memory cache to track processed message IDs (prevents duplicate processing)
+# Key: message_id, Value: timestamp when processed
+processed_messages: Dict[str, datetime] = {}
+IDEMPOTENCY_TTL_HOURS = 1  # Keep message IDs for 1 hour
 # Configure structured logging with proper keyword argument handling
 structlog.configure(
     processors=[
@@ -1620,48 +1626,82 @@ async def whatsapp_webhook_receive(
     """
     WhatsApp webhook message receiver (POST).
     Meta sends messages here. Must respond quickly (< 500ms).
+
+    Implements idempotency to prevent duplicate message processing:
+    - Tracks processed message IDs in memory
+    - Cleans up old entries after TTL expires
+    - Filters out outgoing messages and status updates
     """
     try:
         if not settings.is_whatsapp_configured():
             return JSONResponse(content={"status": "not_configured"})
-        
+
         webhook_data = await request.json()
         logger.info("WhatsApp webhook received")
-        
+
         whatsapp_client = get_whatsapp_client()
         message_data = whatsapp_client.parse_webhook_message(webhook_data)
-        
+
         if not message_data:
             return JSONResponse(content={"status": "ignored"})
-        
+
         user_phone = message_data.get("from")
         user_message = message_data.get("text")
-        
-        if not user_phone or not user_message:
+        message_id = message_data.get("message_id")
+
+        if not user_phone or not user_message or not message_id:
             return JSONResponse(content={"status": "ignored"})
-        
-        logger.info("Processing WhatsApp message", from_number=user_phone)
-        
+
+        # === IDEMPOTENCY CHECK ===
+        # Clean up old processed messages (older than TTL)
+        current_time = datetime.utcnow()
+        ttl_cutoff = current_time - timedelta(hours=IDEMPOTENCY_TTL_HOURS)
+        expired_ids = [mid for mid, timestamp in processed_messages.items() if timestamp < ttl_cutoff]
+        for mid in expired_ids:
+            del processed_messages[mid]
+
+        # Check if this message was already processed
+        if message_id in processed_messages:
+            logger.info("Duplicate message detected - ignoring",
+                       message_id=message_id,
+                       from_number=user_phone,
+                       processed_at=processed_messages[message_id].isoformat())
+            return JSONResponse(content={"status": "duplicate_ignored"})
+
+        # Mark message as processed BEFORE processing to prevent race conditions
+        processed_messages[message_id] = current_time
+
+        logger.info("Processing WhatsApp message",
+                   from_number=user_phone,
+                   message_id=message_id,
+                   message_length=len(user_message))
+
         try:
             rag_response = await process_chat_request_whatsapp(
                 query=user_message,
                 conversation_id=f"whatsapp_{user_phone}",
                 settings=settings
             )
-            
+
             send_result = await whatsapp_client.send_rag_response(
                 to=user_phone,
                 rag_response=rag_response,
                 include_sources=False
             )
-            
-            logger.info("WhatsApp response sent", to=user_phone)
-                       
+
+            logger.info("WhatsApp response sent successfully",
+                       to=user_phone,
+                       message_id=message_id)
+
         except Exception as e:
-            logger.error("WhatsApp processing failed", error=str(e))
-        
+            logger.error("WhatsApp processing failed",
+                        error=str(e),
+                        message_id=message_id,
+                        from_number=user_phone)
+            # Keep the message in processed_messages to prevent retries
+
         return JSONResponse(content={"status": "received"})
-        
+
     except Exception as e:
         logger.error("WhatsApp webhook error", error=str(e))
         return JSONResponse(content={"status": "error"})
