@@ -1574,207 +1574,42 @@ async def get_system_metrics(
 
 # === WHATSAPP BUSINESS API ENDPOINTS ===
 
-@app.get("/whatsapp/verify")
+# === WHATSAPP WEBHOOK ENDPOINTS ===
+# Clean, straightforward implementation following Meta best practices
+
+@app.get("/whatsapp/webhook")
 async def whatsapp_webhook_verify(
-    hub_mode: str = Query(None, alias="hub.mode"),
-    hub_verify_token: str = Query(None, alias="hub.verify_token"),
-    hub_challenge: str = Query(None, alias="hub.challenge"),
-    settings: Settings = Depends(get_settings)
-):
-    """
-    WhatsApp webhook verification endpoint.
-
-    This endpoint is called by WhatsApp to verify the webhook URL
-    during the initial setup process.
-
-    Args:
-        hub_mode: Verification mode from WhatsApp
-        hub_verify_token: Verification token from WhatsApp
-        hub_challenge: Challenge string from WhatsApp
-        settings: Application settings
-
-    Returns:
-        Challenge string if verification succeeds
-
-    Raises:
-        HTTPException: If verification fails
-    """
-    try:
-        if not settings.is_whatsapp_configured():
-            raise HTTPException(
-                status_code=503,
-                detail="WhatsApp integration not configured"
-            )
-
-        whatsapp_client = get_whatsapp_client()
-        challenge = whatsapp_client.verify_webhook(
-            mode=hub_mode,
-            token=hub_verify_token,
-            challenge=hub_challenge
-        )
-
-        if challenge:
-            logger.info("WhatsApp webhook verification successful")
-            # Return plain text response (not JSON) as required by Meta
-            return PlainTextResponse(content=challenge)
-        else:
-            logger.warning("WhatsApp webhook verification failed")
-            raise HTTPException(
-                status_code=403,
-                detail="Webhook verification failed"
-            )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error("WhatsApp webhook verification error", error=str(e))
-        raise HTTPException(
-            status_code=500,
-            detail="Webhook verification failed"
-        )
-
-
-@app.post("/whatsapp/test")
-async def whatsapp_test_endpoint():
-    """Simple test endpoint to verify routing works."""
-    print("🔥 TEST ENDPOINT CALLED!")
-    return {"status": "test_endpoint_working"}
-
-
-@app.post("/whatsapp/simulate")
-async def whatsapp_simulate_webhook(
     request: Request,
     settings: Settings = Depends(get_settings)
 ):
     """
-    Simulate WhatsApp webhook for testing purposes.
-    
-    This endpoint allows you to test the WhatsApp processing pipeline
-    without needing actual WhatsApp webhook calls.
-    
-    Expected payload format:
-    {
-        "object": "whatsapp_business_account",
-        "entry": [{
-            "id": "test_id",
-            "changes": [{
-                "value": {
-                    "messaging_product": "whatsapp",
-                    "metadata": {
-                        "display_phone_number": "+1234567890",
-                        "phone_number_id": "test_phone_id"
-                    },
-                    "messages": [{
-                        "from": "1234567890",
-                        "id": "test_message_id",
-                        "timestamp": "1234567890",
-                        "text": {
-                            "body": "test message"
-                        },
-                        "type": "text"
-                    }]
-                },
-                "field": "messages"
-            }]
-        }]
-    }
+    WhatsApp webhook verification (GET).
+    Meta calls this to verify webhook ownership during setup.
     """
     try:
         if not settings.is_whatsapp_configured():
-            return JSONResponse(
-                status_code=503,
-                content={"status": "not_configured", "message": "WhatsApp not configured"}
-            )
+            raise HTTPException(status_code=503, detail="WhatsApp not configured")
         
-        # Parse the test payload
-        test_data = await request.json()
-        logger.info("WhatsApp simulation received", test_data=test_data)
+        hub_mode = request.query_params.get("hub.mode")
+        hub_verify_token = request.query_params.get("hub.verify_token")
+        hub_challenge = request.query_params.get("hub.challenge")
         
-        # Use the same parsing logic as the real webhook
-        whatsapp_client = get_whatsapp_client()
-        message_data = whatsapp_client.parse_webhook_message(test_data)
+        logger.info("WhatsApp webhook verification", mode=hub_mode)
         
-        if not message_data:
-            return JSONResponse(
-                status_code=400,
-                content={"status": "invalid_payload", "message": "Failed to parse test payload"}
-            )
-        
-        # Process the message synchronously for testing
-        logger.info("Processing simulated WhatsApp message", message_data=message_data)
-        
-        # Use WhatsApp channel for simulation to get proper formatting and cleaning
-        rag_response = await process_chat_request_whatsapp(
-            query=message_data["text"],
-            conversation_id=f"simulation_{message_data['from']}",
-            settings=settings
-        )
-        
-        logger.info("Simulation completed successfully", rag_response=rag_response)
-        
-        return JSONResponse(content={
-            "status": "success",
-            "message": "WhatsApp simulation completed",
-            "parsed_message": message_data,
-            "rag_response": rag_response
-        })
-        
+        if (hub_mode == "subscribe" and 
+            hub_verify_token == settings.whatsapp_verify_token and 
+            hub_challenge):
+            logger.info("WhatsApp verification successful")
+            return PlainTextResponse(content=hub_challenge)
+        else:
+            logger.warning("WhatsApp verification failed")
+            raise HTTPException(status_code=403, detail="Verification failed")
+            
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error("WhatsApp simulation failed", error=str(e))
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": f"Simulation failed: {str(e)}"}
-        )
-
-
-@app.get("/whatsapp/debug")
-async def whatsapp_debug_info(settings: Settings = Depends(get_settings)):
-    """
-    Get detailed WhatsApp debug information.
-    
-    This endpoint provides comprehensive debugging information
-    about the WhatsApp integration status and configuration.
-    """
-    try:
-        debug_info = {
-            "configuration": {
-                "is_configured": settings.is_whatsapp_configured(),
-                "has_access_token": bool(settings.whatsapp_access_token),
-                "has_phone_number_id": bool(settings.whatsapp_phone_number_id),
-                "has_verify_token": bool(settings.whatsapp_verify_token),
-                "has_business_account_id": bool(settings.whatsapp_business_account_id),
-                "has_app_id": bool(settings.whatsapp_app_id),
-                "has_app_secret": bool(settings.whatsapp_app_secret)
-            },
-            "endpoints": {
-                "verification": "/whatsapp/verify",
-                "webhook": "/whatsapp/webhook",
-                "status": "/whatsapp/status",
-                "test": "/whatsapp/test",
-                "simulate": "/whatsapp/simulate",
-                "debug": "/whatsapp/debug"
-            },
-            "webhook_url": settings.get_webhook_url(),
-            "environment": settings.environment
-        }
-        
-        # Add health check if configured
-        if settings.is_whatsapp_configured():
-            try:
-                whatsapp_client = get_whatsapp_client()
-                health_status = await whatsapp_client.health_check()
-                debug_info["health"] = health_status
-            except Exception as e:
-                debug_info["health"] = {"error": str(e)}
-        
-        return JSONResponse(content=debug_info)
-        
-    except Exception as e:
-        logger.error("WhatsApp debug info failed", error=str(e))
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "message": f"Debug info failed: {str(e)}"}
-        )
+        logger.error("WhatsApp verification error", error=str(e))
+        raise HTTPException(status_code=500, detail="Verification error")
 
 
 @app.post("/whatsapp/webhook")
@@ -1783,172 +1618,76 @@ async def whatsapp_webhook_receive(
     settings: Settings = Depends(get_settings)
 ):
     """
-    WhatsApp webhook message receiver endpoint.
-
-    Following Meta's best practices:
-    - Responds with 200 OK quickly (typically < 500ms)
-    - Processes messages synchronously for reliability
-    - Uses the same RAG pipeline as the web UI
-
-    Args:
-        request: FastAPI request object
-        settings: Application settings
-
-    Returns:
-        200 OK response after processing and sending reply
+    WhatsApp webhook message receiver (POST).
+    Meta sends messages here. Must respond quickly (< 500ms).
     """
-    # CRITICAL DEBUG: Print to stdout to bypass logging issues
-    print("🔥 WHATSAPP WEBHOOK FUNCTION ENTERED!")
-
     try:
-        # Step 1: Check WhatsApp configuration
-        print("🔥 CHECKING WHATSAPP CONFIGURATION...")
         if not settings.is_whatsapp_configured():
-            print("🔥 WHATSAPP NOT CONFIGURED!")
-            logger.warning("WhatsApp webhook received but not configured")
             return JSONResponse(content={"status": "not_configured"})
-
-        # Step 2: Parse request body
-        print("🔥 PARSING REQUEST BODY...")
-        try:
-            request_data = await request.json()
-            print(f"🔥 REQUEST DATA PARSED SUCCESSFULLY")
-        except Exception as e:
-            print(f"🔥 FAILED TO PARSE REQUEST BODY: {str(e)}")
-            logger.error("Failed to parse webhook request body", error=str(e))
-            return JSONResponse(content={"status": "invalid_request"})
-
-        # Step 3: Log raw webhook data
-        logger.info("WhatsApp webhook received",
-                   entry_count=len(request_data.get("entry", [])),
-                   raw_data_keys=list(request_data.keys()),
-                   webhook_data_type=type(request_data).__name__)
-
-        # Step 4: Parse WhatsApp message
-        print("🔥 PARSING WHATSAPP MESSAGE...")
+        
+        webhook_data = await request.json()
+        logger.info("WhatsApp webhook received")
+        
         whatsapp_client = get_whatsapp_client()
-        logger.info("Parsing WhatsApp webhook message")
+        message_data = whatsapp_client.parse_webhook_message(webhook_data)
         
-        message_data = whatsapp_client.parse_webhook_message(request_data)
-        print(f"🔥 MESSAGE DATA RESULT: {message_data}")
-        
-        logger.info("WhatsApp message parsing result",
-                   message_data_exists=message_data is not None,
-                   message_data_keys=list(message_data.keys()) if message_data else None)
-
         if not message_data:
-            # Not a text message, status update, or parsing failed
-            print("🔥 MESSAGE DATA IS NONE - RETURNING IGNORED!")
-            logger.info("WhatsApp message ignored - no valid message data")
             return JSONResponse(content={"status": "ignored"})
-
-        # Step 5: Extract message details
+        
         user_phone = message_data.get("from")
         user_message = message_data.get("text")
-        message_id = message_data.get("message_id")
-        print(f"🔥 EXTRACTED DETAILS - Phone: {user_phone}, Message: {user_message}, ID: {message_id}")
-
-        logger.info("WhatsApp message details extracted",
-                   user_phone=user_phone,
-                   user_message_length=len(user_message) if user_message else 0,
-                   message_id=message_id)
-
+        
         if not user_phone or not user_message:
-            print(f"🔥 MISSING REQUIRED FIELDS - Phone: {bool(user_phone)}, Message: {bool(user_message)}")
-            logger.warning("WhatsApp message missing required fields",
-                          has_phone=bool(user_phone),
-                          has_message=bool(user_message))
             return JSONResponse(content={"status": "ignored"})
-
-        # Step 6: Process message synchronously (with timeout)
-        # FastAPI background tasks don't work reliably in multi-worker production
-        print(f"🚀 PROCESSING MESSAGE SYNCHRONOUSLY for {user_phone}: {user_message}")
+        
+        logger.info("Processing WhatsApp message", from_number=user_phone)
         
         try:
-            # Process the message through WhatsApp-specific RAG system for proper formatting and cleaning
             rag_response = await process_chat_request_whatsapp(
                 query=user_message,
                 conversation_id=f"whatsapp_{user_phone}",
                 settings=settings
             )
             
-            print(f"🚀 RAG RESPONSE GENERATED: {rag_response.get('response', '')[:100]}...")
-            
-            # Send RAG response back via WhatsApp
-            whatsapp_client = get_whatsapp_client()
             send_result = await whatsapp_client.send_rag_response(
                 to=user_phone,
                 rag_response=rag_response,
-                include_sources=False  # Keep WhatsApp messages clean and concise
+                include_sources=False
             )
             
-            print(f"🚀 WHATSAPP RESPONSE SENT: {send_result}")
-            
-            logger.info(
-                "WhatsApp message processed and response sent",
-                to=user_phone,
-                message_id=send_result.get("message_id"),
-                confidence=rag_response.get("confidence"),
-                processing_time_ms=rag_response.get("processing_time_ms")
-            )
-            
+            logger.info("WhatsApp response sent", to=user_phone)
+                       
         except Exception as e:
-            print(f"🚀 PROCESSING ERROR: {str(e)}")
-            logger.error(
-                "WhatsApp message processing failed",
-                error=str(e),
-                from_number=user_phone,
-                message_id=message_id
-            )
-            # Still return success to avoid webhook retries
-            
-        # Step 7: Return immediate success (as required by Meta)
-        logger.info("WhatsApp webhook processed successfully")
+            logger.error("WhatsApp processing failed", error=str(e))
+        
         return JSONResponse(content={"status": "received"})
-
+        
     except Exception as e:
-        # Log error but still return 200 to prevent webhook retries
-        logger.error("WhatsApp webhook processing error", error=str(e))
-        return JSONResponse(content={"status": "error", "message": "Webhook processed with errors"})
-
-
-# UNUSED FUNCTION REMOVED - No longer needed
+        logger.error("WhatsApp webhook error", error=str(e))
+        return JSONResponse(content={"status": "error"})
 
 
 @app.get("/whatsapp/status")
 async def whatsapp_status(settings: Settings = Depends(get_settings)):
-    """
-    Get WhatsApp integration status and health.
-
-    Returns:
-        WhatsApp integration status and configuration
-    """
+    """Get WhatsApp integration status."""
     try:
         if not settings.is_whatsapp_configured():
-            return JSONResponse(content={
-                "status": "not_configured",
-                "configured": False,
-                "message": "WhatsApp Business API credentials not configured"
-            })
-
+            return JSONResponse(content={"status": "not_configured", "configured": False})
+        
         whatsapp_client = get_whatsapp_client()
-        health_status = await whatsapp_client.health_check()
-
+        health = await whatsapp_client.health_check()
+        
         return JSONResponse(content={
             "status": "configured",
             "configured": True,
-            "health": health_status,
+            "health": health,
             "phone_number_id": settings.whatsapp_phone_number_id,
-            "webhook_url": settings.get_webhook_url()
+            "webhook_url": "https://demo-law.bineyes.com/whatsapp/webhook"
         })
-
+        
     except Exception as e:
         logger.error("WhatsApp status check failed", error=str(e))
-        return JSONResponse(content={
-            "status": "error",
-            "configured": settings.is_whatsapp_configured(),
-            "error": str(e)
-        })
+        return JSONResponse(content={"status": "error", "error": str(e)})
 
 
 @app.get("/whatsapp/rate-limit")
