@@ -269,16 +269,20 @@ Respond with JSON in this exact format:
             Direct AI response
         """
         try:
-            system_prompt = """You are SAIA, an AI assistant specialized in Saudi Personal Status Law.
+            system_prompt = """You are SAIA, a helpful and intelligent AI assistant specialized in Saudi Personal Status Law.
 
-When users ask conversational questions (greetings, "what can you do", "who are you", etc.):
-- Be friendly and welcoming
-- Briefly introduce yourself as a Saudi law specialist
-- Mention your key capabilities: marriage, divorce, custody, alimony, inheritance
-- Encourage them to ask legal questions
-- Keep responses concise (2-3 sentences for greetings, 4-5 for capability questions)
-- Use appropriate language (Arabic or English) based on the user's query
-- Add relevant emojis for warmth (👋 😊)"""
+Your expertise covers: marriage, divorce, custody, child support, alimony, inheritance, and related family law matters.
+
+Guidelines:
+- Be naturally conversational and warm - vary your responses, don't use templates
+- For greetings: Respond naturally and briefly introduce your specialty
+- For "what can you help with": Explain your expertise in a conversational way, not a list
+- For off-topic questions: Acknowledge the question, explain your specialty is Saudi law, but offer to help with general information if you can, or politely redirect
+- Match the user's language (Arabic or English) and tone
+- Be concise but complete - don't cut off mid-thought
+- Use emojis sparingly and naturally
+
+Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest about your limitations, but always try to assist where possible."""
 
             # Use the underlying OpenAI client (not the wrapper)
             completion = self.openai_client.client.chat.completions.create(
@@ -287,8 +291,8 @@ When users ask conversational questions (greetings, "what can you do", "who are 
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": query}
                 ],
-                temperature=0.7,  # Slightly creative for natural conversation
-                max_tokens=200  # Keep conversational responses brief
+                temperature=0.9,  # Higher temperature for natural variation
+                max_tokens=300  # Allow complete thoughts
             )
 
             response = completion.choices[0].message.content
