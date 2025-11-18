@@ -333,7 +333,7 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
             classification = await self._classify_query(query)
 
             if classification.query_type == QueryType.CONVERSATIONAL:
-                # Handle conversational queries without RAG
+                # Handle conversational queries without RAG  
                 conversational_response = await self._generate_conversational_response(query)
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
                 logger.info(
@@ -559,6 +559,7 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
                 try:
                     # Check if conversation exists, if not create it directly
                     existing_conversation = await self.conversation_manager.get_conversation(conversation_id)
+                    
                     if not existing_conversation:
                         # Create conversation directly with the provided conversation_id
                         from .conversation_memory import ConversationContext, ConversationState
@@ -999,14 +1000,21 @@ Remember: Only use the context provided above to answer questions with well-stru
             raise
 
 
+# Global instance (following dev-rules.md pattern)
+_rag_service = None
+
+
 def get_rag_service() -> RAGService:
     """
-    Get RAG service instance.
+    Get global RAG service instance.
     
     Returns:
         RAG service instance
     """
-    return RAGService()
+    global _rag_service
+    if _rag_service is None:
+        _rag_service = RAGService()
+    return _rag_service
 
 
 # Export for easy importing
