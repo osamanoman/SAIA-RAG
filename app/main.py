@@ -1757,47 +1757,43 @@ async def whatsapp_status(settings: Settings = Depends(get_settings)):
         return JSONResponse(content={"status": "error", "error": str(e)})
 
 
-@app.get("/admin/conversations")
-async def get_conversations_debug(
+@app.get("/admin/conversations/debug")
+async def debug_conversations(
     api_key: Optional[str] = Depends(api_key_auth)
 ):
-    """Get conversation memory status for debugging."""
+    """Debug endpoint to check conversation memory state."""
     try:
         from .conversation_memory import get_conversation_memory_manager
-        from .rag_service import get_rag_service
-        
         manager = get_conversation_memory_manager()
-        rag = get_rag_service()
         
-        conversations_summary = []
+        conversations_data = []
         for conv_id, conv in list(manager.active_conversations.items())[:20]:
-            conversations_summary.append({
+            messages_preview = []
+            for msg in conv.messages[-5:]:  # Last 5 messages
+                messages_preview.append({
+                    "type": msg.message_type.value,
+                    "content": msg.content[:100],
+                    "timestamp": msg.timestamp.isoformat()
+                })
+            
+            conversations_data.append({
                 "conversation_id": conv_id,
                 "total_messages": conv.total_messages,
-                "messages_in_memory": len(conv.messages),
+                "messages_in_list": len(conv.messages),
                 "language": conv.language_preference,
                 "state": conv.state.value,
-                "created_at": conv.created_at.isoformat(),
-                "updated_at": conv.updated_at.isoformat()
+                "recent_messages": messages_preview,
+                "created": conv.created_at.isoformat(),
+                "updated": conv.updated_at.isoformat()
             })
         
         return JSONResponse(content={
             "status": "success",
-            "total_active_conversations": len(manager.active_conversations),
-            "conversations": conversations_summary,
-            "rag_service_id": id(rag),
-            "conversation_manager_id": id(rag.conversation_manager),
-            "global_manager_id": id(manager),
-            "managers_match": id(rag.conversation_manager) == id(manager),
-            "debug_stats": {
-                "generate_response_calls": rag.debug_generate_response_calls,
-                "storage_attempts": rag.debug_conversation_storage_attempts,
-                "storage_successes": rag.debug_conversation_storage_successes,
-                "storage_errors": rag.debug_conversation_storage_errors
-            }
+            "total_conversations": len(manager.active_conversations),
+            "conversations": conversations_data
         })
     except Exception as e:
-        logger.error("Failed to get conversations", error=str(e))
+        logger.error("Debug conversations failed", error=str(e))
         return JSONResponse(content={"status": "error", "error": str(e)})
 
 

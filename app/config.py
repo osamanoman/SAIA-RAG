@@ -125,7 +125,7 @@ class Settings(BaseSettings):
         description="Lower confidence threshold for WhatsApp responses"
     )
     max_response_tokens: int = Field(
-        default=300,
+        default=1500,
         alias="MAX_RESPONSE_TOKENS",
         description="Maximum tokens for generated responses"
     )

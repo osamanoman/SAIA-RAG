@@ -439,6 +439,9 @@ class QueryProcessor:
         if len(query.split()) <= 5:
             # Check for follow-up indicators
             follow_up_indicators = [
+                "اكمل",  # Complete/Continue
+                "استمر",  # Continue
+                "أكمل",  # Complete (alternative spelling)
                 "ماذا عن",  # What about
                 "والحضانة",  # And custody
                 "والنفقة",  # And alimony
@@ -448,6 +451,14 @@ class QueryProcessor:
                 "كذلك",  # As well
                 "بالنسبة",  # Regarding
                 "وماذا",  # And what
+                "كم المدة",  # How long
+                "كم المبلغ",  # How much (amount)
+                "كم",  # How much/How many
+                "متى",  # When
+                "أين",  # Where
+                "كيف",  # How
+                "هل",  # Is/Does
+                "لماذا",  # Why
             ]
 
             for indicator in follow_up_indicators:

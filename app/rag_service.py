@@ -188,7 +188,7 @@ class RAGService:
         }
         logger.info("Response cached", cache_key=cache_key[:8])
 
-    async def _classify_query(self, query: str) -> QueryClassification:
+    async def _classify_query(self, query: str, conversation_context: Optional[Dict[str, Any]] = None) -> QueryClassification:
         """
         Use AI to intelligently classify the query type.
 
@@ -197,16 +197,46 @@ class RAGService:
 
         Args:
             query: User query
+            conversation_context: Optional conversation history for context-aware classification
 
         Returns:
             QueryClassification with type and reasoning
         """
         try:
+            # Build context-aware prompt if conversation history exists
+            context_info = ""
+            if conversation_context and conversation_context.get("messages"):
+                recent_messages = conversation_context["messages"][-3:]  # Last 3 messages
+                context_lines = []
+                for msg in recent_messages:
+                    role = "User" if msg.get("type") == "user_query" else "AI"
+                    content = msg.get("content", "")[:100]  # First 100 chars
+                    context_lines.append(f"{role}: {content}")
+                context_info = f"""
+
+CONVERSATION HISTORY:
+{chr(10).join(context_lines)}
+
+IMPORTANT: If the current query is a follow-up like "اكمل" (continue), "استمر" (continue), "كم المدة" (how long), "ماذا عن" (what about), it should be classified as DOMAIN_SPECIFIC because it requires retrieving legal information."""
+            
             classification_prompt = f"""Classify this user query into one of two categories and respond in JSON format:
 
-1. **CONVERSATIONAL**: Greetings, introductions, "what can you do", "how can you help", "who are you", "thank you", or general chitchat
-2. **DOMAIN_SPECIFIC**: Questions about Saudi law, legal procedures, custody, marriage, divorce, inheritance, or any legal topic
+**CONVERSATIONAL** - User intents that DON'T require legal knowledge retrieval:
+- Greetings: "hello", "hi", "good morning"
+- Meta questions: "what can you do?", "how can you help?", "who are you?"
+- Thanks: "thank you", "thanks"
+- Conversation management: "I have a new case", "I want to start a new topic", "let's discuss something else", "new question"
+- Acknowledgments: "okay", "got it", "I understand"
 
+**DOMAIN_SPECIFIC** - Requires retrieving Saudi legal knowledge:
+- Specific legal questions: "What are custody conditions?", "How much is alimony?", "What are divorce procedures?"
+- Legal advice: "Can I file a case?", "What are my rights?"
+- Follow-up legal questions (when there's conversation history): "continue", "what about alimony?", "how long?"
+
+**CRITICAL**: 
+- "I have a new case" = CONVERSATIONAL (user is just signaling topic change, not asking a legal question)
+- "What is custody?" = DOMAIN_SPECIFIC (needs legal knowledge)
+{context_info}
 User Query: "{query}"
 
 Respond with JSON in this exact format:
@@ -329,10 +359,28 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
             start_time = datetime.utcnow()
             confidence_threshold = confidence_threshold or self.settings.confidence_threshold
 
-            # Step 0: AI-powered query classification
-            classification = await self._classify_query(query)
+            # Step 0: Get conversation context FIRST (before classification)
+            conversation_context = None
+            has_conversation_history = False
+            if conversation_id:
+                conversation_context = await self.conversation_manager.get_conversation_context(
+                    conversation_id=conversation_id,
+                    include_messages=True
+                )
+                has_conversation_history = bool(conversation_context and conversation_context.get("messages"))
+                logger.info(
+                    "Retrieved conversation context",
+                    conversation_id=conversation_id,
+                    message_count=len(conversation_context.get("messages", [])) if conversation_context else 0,
+                    has_history=has_conversation_history
+                )
 
-            if classification.query_type == QueryType.CONVERSATIONAL:
+            # Step 1: AI-powered query classification (with conversation context)
+            classification = await self._classify_query(query, conversation_context)
+
+            # Only treat as conversational if there's NO conversation history
+            # If there's history, short queries like "اكمل" are likely domain-specific
+            if classification.query_type == QueryType.CONVERSATIONAL and not has_conversation_history:
                 # Handle conversational queries without RAG  
                 conversational_response = await self._generate_conversational_response(query)
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
@@ -353,18 +401,12 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
                     "preprocessing_steps": ["ai_query_classification", "conversational_response"],
                     "conversation_aware": False
                 }
-
-            # Step 1: Get conversation context if conversation_id provided
-            conversation_context = None
-            if conversation_id:
-                conversation_context = await self.conversation_manager.get_conversation_context(
-                    conversation_id=conversation_id,
-                    include_messages=True
-                )
+            elif classification.query_type == QueryType.CONVERSATIONAL and has_conversation_history:
+                # Query classified as conversational BUT has history → treat as domain-specific
                 logger.info(
-                    "Retrieved conversation context",
-                    conversation_id=conversation_id,
-                    message_count=len(conversation_context.get("messages", [])) if conversation_context else 0
+                    "Query reclassified as domain-specific due to conversation history",
+                    query=query[:50],
+                    original_classification="conversational"
                 )
 
             # Step 1: Process and enhance query if enabled (CONSISTENT CHANNEL)
