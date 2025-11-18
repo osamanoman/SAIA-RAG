@@ -124,34 +124,39 @@ class ResponseFormatter:
             tone = self._determine_tone(category, query_intent, confidence)
             format_type = self._determine_format(category, content)
             
-            # Step 2: Apply basic formatting
-            formatted_content = self._apply_basic_formatting(content)
-            formatting_steps.append("basic_formatting")
-            
-            # Step 3: Apply category-specific formatting
-            formatted_content = self._apply_category_formatting(
-                formatted_content, category, format_type
-            )
-            formatting_steps.append("category_formatting")
-            
-            # Step 4: Apply tone adjustments
-            formatted_content = self._apply_tone_formatting(
-                formatted_content, tone, query_intent
-            )
-            formatting_steps.append("tone_formatting")
-            
-            # Step 5: Apply channel-specific optimizations
+            # CRITICAL: Apply channel-specific formatting FIRST to preserve line breaks
+            # WhatsApp needs \n\n to be preserved, but basic_formatting collapses them
             formatted_content, channel_optimized = self._apply_channel_formatting(
-                formatted_content, channel
+                content, channel
             )
             if channel_optimized:
                 formatting_steps.append("channel_optimization")
             
-            # Step 6: Add helpful elements
-            formatted_content = self._add_helpful_elements(
-                formatted_content, category, confidence, sources_count
-            )
-            formatting_steps.append("helpful_elements")
+            # Step 2: Apply basic formatting (SKIP for WhatsApp to preserve formatting)
+            if channel != "whatsapp":
+                formatted_content = self._apply_basic_formatting(formatted_content)
+                formatting_steps.append("basic_formatting")
+            
+            # Step 3: Apply category-specific formatting (SKIP for WhatsApp)
+            if channel != "whatsapp":
+                formatted_content = self._apply_category_formatting(
+                    formatted_content, category, format_type
+                )
+                formatting_steps.append("category_formatting")
+            
+            # Step 4: Apply tone adjustments (SKIP for WhatsApp)
+            if channel != "whatsapp":
+                formatted_content = self._apply_tone_formatting(
+                    formatted_content, tone, query_intent
+                )
+                formatting_steps.append("tone_formatting")
+            
+            # Step 6: Add helpful elements (SKIP for WhatsApp)
+            if channel != "whatsapp":
+                formatted_content = self._add_helpful_elements(
+                    formatted_content, category, confidence, sources_count
+                )
+                formatting_steps.append("helpful_elements")
             
             return FormattedResponse(
                 content=formatted_content,
@@ -374,7 +379,12 @@ class ResponseFormatter:
         # Clean up the content first
         content = content.strip()
         
-        # Split into lines
+        # CRITICAL: Convert markdown bold (**) to WhatsApp bold (*)
+        # WhatsApp uses single asterisk for bold, not double
+        content = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', content)
+        
+        # Split by sentences or logical breaks
+        # Look for common Arabic patterns for sections/lists
         lines = content.split('\n')
         formatted_lines = []
         
@@ -382,21 +392,47 @@ class ResponseFormatter:
             line = line.strip()
             if not line:
                 continue
-                
-            # Check if line contains numbered or bullet points
-            if re.match(r'^\d+\.', line) or re.match(r'^\*', line):
-                # Convert to WhatsApp bullet format
-                line = re.sub(r'^\d+\.\s*', '• ', line)
+            
+            # Detect headers (lines ending with : or containing bold text at start)
+            if re.match(r'^\*[^*]+\*:', line) or line.endswith(':'):
+                # Add spacing before headers (except for first line)
+                if formatted_lines:
+                    formatted_lines.append('')  # Empty line for spacing
+                formatted_lines.append(line)
+                continue
+            
+            # Check if line contains numbered list items (1. 2. 3. etc)
+            if re.match(r'^\d+[\.\)]\s*\*', line):
+                # Numbered item with bold - keep the number, make it a bullet with spacing
+                line = re.sub(r'^\d+[\.\)]\s*', '', line)  # Remove number
+                if formatted_lines and not formatted_lines[-1] == '':
+                    formatted_lines.append('')  # Add spacing before list
+                formatted_lines.append('• ' + line)
+            elif re.match(r'^\d+[\.\)]\s', line):
+                # Regular numbered item
+                line = re.sub(r'^\d+[\.\)]\s*', '• ', line)
+                if formatted_lines and not formatted_lines[-1] == '':
+                    formatted_lines.append('')  # Add spacing before list
+                formatted_lines.append(line)
+            elif re.match(r'^\*\s', line):
+                # Already has asterisk bullet, convert to proper bullet
                 line = re.sub(r'^\*\s*', '• ', line)
                 formatted_lines.append(line)
             elif re.match(r'^•', line):
-                # Already formatted, keep as is
+                # Already has bullet, keep as is
                 formatted_lines.append(line)
             else:
-                # Regular text line
-                formatted_lines.append(line)
+                # Regular text line - check if it's a continuation or new section
+                # If previous line was a bullet, don't add extra spacing
+                if formatted_lines and formatted_lines[-1].startswith('•'):
+                    formatted_lines.append(line)
+                else:
+                    # New paragraph - add spacing if not first line
+                    if formatted_lines:
+                        formatted_lines.append('')
+                    formatted_lines.append(line)
         
-        # Join lines with proper spacing
+        # Join lines with single line breaks (we already added empty strings for spacing)
         formatted_content = '\n'.join(formatted_lines)
         
         # Add WhatsApp-friendly emojis for common patterns
@@ -422,6 +458,10 @@ class ResponseFormatter:
         # Clean up the content first
         content = content.strip()
         
+        # CRITICAL: Convert markdown bold (**) to WhatsApp bold (*)
+        # WhatsApp uses single asterisk for bold, not double
+        content = re.sub(r'\*\*([^*]+)\*\*', r'*\1*', content)
+        
         # Split into lines
         lines = content.split('\n')
         formatted_lines = []
@@ -430,21 +470,46 @@ class ResponseFormatter:
             line = line.strip()
             if not line:
                 continue
-                
-            # Check if line contains numbered or bullet points
-            if re.match(r'^\d+\.', line) or re.match(r'^\*', line):
-                # Convert to WhatsApp bullet format
-                line = re.sub(r'^\d+\.\s*', '• ', line)
+            
+            # Detect headers (lines ending with : or containing bold text at start)
+            if re.match(r'^\*[^*]+\*:', line) or line.endswith(':'):
+                # Add spacing before headers (except for first line)
+                if formatted_lines:
+                    formatted_lines.append('')  # Empty line for spacing
+                formatted_lines.append(line)
+                continue
+            
+            # Check if line contains numbered list items (1. 2. 3. etc)
+            if re.match(r'^\d+[\.\)]\s*\*', line):
+                # Numbered item with bold - convert to bullet with spacing
+                line = re.sub(r'^\d+[\.\)]\s*', '', line)  # Remove number
+                if formatted_lines and not formatted_lines[-1] == '':
+                    formatted_lines.append('')  # Add spacing before list
+                formatted_lines.append('• ' + line)
+            elif re.match(r'^\d+[\.\)]\s', line):
+                # Regular numbered item
+                line = re.sub(r'^\d+[\.\)]\s*', '• ', line)
+                if formatted_lines and not formatted_lines[-1] == '':
+                    formatted_lines.append('')  # Add spacing before list
+                formatted_lines.append(line)
+            elif re.match(r'^\*\s', line):
+                # Already has asterisk bullet, convert to proper bullet
                 line = re.sub(r'^\*\s*', '• ', line)
                 formatted_lines.append(line)
             elif re.match(r'^•', line):
-                # Already formatted, keep as is
+                # Already has bullet, keep as is
                 formatted_lines.append(line)
             else:
                 # Regular text line
-                formatted_lines.append(line)
+                if formatted_lines and formatted_lines[-1].startswith('•'):
+                    formatted_lines.append(line)
+                else:
+                    # New paragraph - add spacing if not first line
+                    if formatted_lines:
+                        formatted_lines.append('')
+                    formatted_lines.append(line)
         
-        # Join lines with proper spacing
+        # Join lines with single line breaks (we already added empty strings for spacing)
         formatted_content = '\n'.join(formatted_lines)
         
         # Add WhatsApp-friendly emojis for common patterns

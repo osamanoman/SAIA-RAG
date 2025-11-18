@@ -314,6 +314,16 @@ class WhatsAppClient:
                 logger.warning("Entry is not a dictionary", entry_type=type(entry).__name__)
                 return None
 
+            # Extract business_account_id from entry (this is the WABA ID)
+            incoming_business_account_id = entry.get("id")
+
+            # CRITICAL: Only process messages for the configured business account
+            if incoming_business_account_id and incoming_business_account_id != self.business_account_id:
+                logger.info("Message from different business account - ignoring",
+                           incoming_waba_id=incoming_business_account_id,
+                           configured_waba_id=self.business_account_id)
+                return None
+
             # Step 2: Extract changes
             changes = entry.get("changes", [])
             if not changes:

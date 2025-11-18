@@ -192,6 +192,7 @@ class ChatRequest(BaseModel):
     max_tokens: Optional[int] = Field(default=500, ge=1, le=2000, description="Maximum response tokens")
     temperature: Optional[float] = Field(default=0.7, ge=0.0, le=2.0, description="Response creativity")
     include_sources: bool = Field(default=True, description="Include source documents in response")
+    channel: Optional[str] = Field(default="web", description="Channel for formatting (web, whatsapp)")
     
     @field_validator("message")
     @classmethod

@@ -349,8 +349,34 @@ async def web_ui():
         )
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+async def privacy_policy():
+    """Privacy Policy page for WhatsApp Business API compliance."""
+    try:
+        with open("static/privacy.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Privacy policy not found")
 
 
+@app.get("/terms", response_class=HTMLResponse)
+async def terms_of_service():
+    """Terms of Service page for WhatsApp Business API compliance."""
+    try:
+        with open("static/terms.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Terms of service not found")
+
+
+@app.get("/deletion", response_class=HTMLResponse)
+async def user_data_deletion():
+    """User Data Deletion instructions for WhatsApp Business API compliance."""
+    try:
+        with open("static/deletion.html", "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Data deletion page not found")
 
 
 # === DOCUMENT MANAGEMENT ENDPOINTS ===
@@ -798,14 +824,15 @@ async def chat(
         rag_service = get_rag_service()
         logger.info("RAG service obtained")
 
-        # Generate RAG response using web channel for proper markdown formatting
-        logger.info("Starting RAG response generation for web UI")
+        # Generate RAG response with channel-specific formatting
+        channel = request.channel if request.channel else "web"  # Default to web if not specified
+        logger.info("Starting RAG response generation", channel=channel)
         rag_result = await rag_service.generate_response(
             query=request.message,
             conversation_id=request.conversation_id,
             max_context_chunks=8,
             confidence_threshold=settings.confidence_threshold,
-            channel="web"  # Use web channel to preserve markdown formatting
+            channel=channel  # Use channel from request for proper formatting
         )
         logger.info("RAG response generated", result_keys=list(rag_result.keys()))
 
