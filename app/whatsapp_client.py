@@ -37,6 +37,7 @@ class WhatsAppClient:
         self.access_token = self.settings.whatsapp_access_token
         self.phone_number_id = self.settings.whatsapp_phone_number_id
         self.verify_token = self.settings.whatsapp_verify_token
+        self.business_account_id = self.settings.whatsapp_business_account_id
         
         # API endpoints
         self.base_url = "https://graph.facebook.com/v18.0"
