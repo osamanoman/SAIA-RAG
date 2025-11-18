@@ -420,6 +420,90 @@ class QueryProcessor:
 
         return case_facts
 
+    async def extract_case_facts_ai(self, message: str) -> Dict[str, Any]:
+        """
+        AI-powered case fact extraction using GPT-4o-mini.
+        
+        Extracts structured information:
+        - Parties (plaintiff, defendant, affected persons)
+        - Key facts (ages, durations, marital status)
+        - Legal issues (custody, alimony, divorce, visitation)
+        - Specific requests/demands
+        
+        Args:
+            message: User message (typically first long case description)
+            
+        Returns:
+            Dictionary with structured case facts
+        """
+        # Only extract if message is long enough (likely case description)
+        if len(message.split()) < 20:
+            logger.info("Message too short for AI extraction", word_count=len(message.split()))
+            return {}
+        
+        extraction_prompt = f"""استخرج المعلومات القانونية المنظمة من النص العربي التالي.
+
+ركّز على:
+- الأطراف: الأسماء، الأدوار (مدعي/مدعى عليه/زوج/زوجة)
+- الوقائع الأساسية: الأعمار، المدد الزمنية، الحالة الزوجية
+- القضايا القانونية: حضانة، نفقة، طلاق، زيارة
+- المطالب المحددة
+
+استجب بصيغة JSON:
+{{
+  "case_title": "...",
+  "parties": {{
+    "plaintiff": {{"name": "...", "role": "..."}},
+    "defendant": {{"name": "...", "role": "..."}},
+    "affected": [{{"name": "...", "age": X, "relation": "..."}}]
+  }},
+  "key_facts": {{
+    "marriage_duration": "...",
+    "separation_duration": "...",
+    "marital_status": "...",
+    "custody_status": "...",
+    "financial_support": "..."
+  }},
+  "legal_issues": [...],
+  "requests": [...]
+}}
+
+النص: {message}"""
+        
+        try:
+            # Use OpenAI client (following dev-rules.md pattern)
+            from .openai_client import get_openai_client
+            openai_client = get_openai_client()
+            
+            response = await openai_client.client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": "أنت محلل وثائق قانونية للقانون السعودي. استخرج المعلومات بدقة."},
+                    {"role": "user", "content": extraction_prompt}
+                ],
+                response_format={"type": "json_object"},
+                temperature=0.0,
+                max_tokens=800
+            )
+            
+            import json
+            case_facts = json.loads(response.choices[0].message.content)
+            
+            logger.info(
+                "AI case facts extracted",
+                has_parties=bool(case_facts.get("parties")),
+                num_issues=len(case_facts.get("legal_issues", [])),
+                num_requests=len(case_facts.get("requests", [])),
+                message_length=len(message)
+            )
+            
+            return case_facts
+            
+        except Exception as e:
+            logger.error("AI case fact extraction failed", error=str(e))
+            # Fallback to simple extraction
+            return self._extract_case_facts({"messages": [{"type": "user_query", "content": message}]})
+
     def _is_follow_up_query(self, query: str) -> bool:
         """
         Detect if query is a follow-up (short, vague, uses pronouns).
@@ -501,37 +585,62 @@ class QueryProcessor:
             Reformulated query with case context
         """
         try:
-            # Build context string from case facts
+            # Build context string from case facts (supports both AI-extracted and simple formats)
             context_parts = []
+            
+            # Handle rich AI-extracted format
+            if "parties" in case_facts:
+                parties = case_facts["parties"]
+                if parties.get("plaintiff", {}).get("name"):
+                    context_parts.append(f"المدعي/المدعية: {parties['plaintiff']['name']} ({parties['plaintiff'].get('role', '')})")
+                if parties.get("defendant", {}).get("name"):
+                    context_parts.append(f"المدعى عليه: {parties['defendant']['name']} ({parties['defendant'].get('role', '')})")
+                if parties.get("affected"):
+                    affected_names = [p.get("name", "") for p in parties["affected"]]
+                    context_parts.append(f"المتأثرون: {', '.join(affected_names)}")
+            
+            if "key_facts" in case_facts and case_facts["key_facts"]:
+                facts = case_facts["key_facts"]
+                if facts.get("marriage_duration"):
+                    context_parts.append(f"مدة الزواج: {facts['marriage_duration']}")
+                if facts.get("separation_duration"):
+                    context_parts.append(f"مدة الانفصال: {facts['separation_duration']}")
+            
+            if "legal_issues" in case_facts and case_facts["legal_issues"]:
+                context_parts.append(f"القضايا القانونية: {', '.join(case_facts['legal_issues'])}")
+            
+            # Handle simple format (fallback)
+            if not context_parts:
+                if case_facts.get("plaintiff_type"):
+                    context_parts.append(f"Plaintiff: {case_facts['plaintiff_type']}")
+                if case_facts.get("defendant_type"):
+                    context_parts.append(f"Defendant: {case_facts['defendant_type']}")
+                if case_facts.get("key_issues"):
+                    context_parts.append(f"Key issues: {', '.join(case_facts['key_issues'])}")
 
-            if case_facts.get("plaintiff_type"):
-                context_parts.append(f"Plaintiff: {case_facts['plaintiff_type']}")
-
-            if case_facts.get("defendant_type"):
-                context_parts.append(f"Defendant: {case_facts['defendant_type']}")
-
-            if case_facts.get("key_issues"):
-                context_parts.append(f"Key issues: {', '.join(case_facts['key_issues'])}")
-
-            context_string = "; ".join(context_parts)
+            context_string = "\n".join(context_parts) if context_parts else "لا يوجد سياق متوفر"
+            
+            # Get case title if available
+            case_title = case_facts.get("case_title", case_facts.get("first_query", "")[:100])
 
             # Use LLM to reformulate
-            reformulation_prompt = f"""You are a legal query reformulation assistant.
+            reformulation_prompt = f"""أنت مساعد لإعادة صياغة الاستفسارات القانونية.
 
-Original follow-up query: {query}
+الاستفسار المتابع: {query}
 
-Case context: {context_string}
+سياق القضية:
+{context_string}
 
-Original case description: {case_facts.get('first_query', '')[:500]}
+عنوان القضية أو وصفها: {case_title}
 
-Task: Reformulate the follow-up query to be specific and include relevant case context.
-The reformulated query should be a complete, standalone question that includes:
-1. The specific legal topic from the follow-up (e.g., alimony, custody)
-2. Relevant case facts (e.g., drug addiction, neglect)
-3. The parties involved (e.g., wife, husband)
+مهمتك: أعد صياغة الاستفسار المتابع ليكون محددًا ويتضمن سياق القضية المناسب.
+الاستفسار المعاد صياغته يجب أن يكون سؤالًا كاملاً ومستقلاً يتضمن:
+1. الموضوع القانوني المحدد من المتابعة (مثل: النفقة، الحضانة)
+2. الوقائع ذات الصلة (مثل: الإدمان، الإهمال، الأطفال)
+3. الأطراف المعنية (مثل: الزوجة، الزوج، الأطفال)
 
-Respond with ONLY the reformulated query in the same language as the original query.
-Do not add explanations or additional text."""
+استجب فقط بالاستفسار المعاد صياغته بنفس لغة الاستفسار الأصلي.
+لا تضف شروحات أو نصوص إضافية."""
 
             messages = [{"role": "user", "content": reformulation_prompt}]
 

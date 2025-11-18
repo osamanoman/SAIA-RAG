@@ -82,6 +82,13 @@ class ConversationContext(BaseModel):
     total_messages: int = Field(default=0, description="Total message count")
     resolution_attempts: int = Field(default=0, description="Number of resolution attempts")
     escalation_triggers: List[str] = Field(default_factory=list, description="Escalation trigger events")
+    
+    # NEW: Session management fields
+    topic_id: str = Field(default_factory=lambda: f"topic-{int(datetime.utcnow().timestamp())}", description="Current topic/session identifier")
+    last_interaction_at: datetime = Field(default_factory=datetime.utcnow, description="Last interaction timestamp for session expiry")
+    
+    # NEW: Rich case facts for legal context
+    case_facts: Dict[str, Any] = Field(default_factory=dict, description="AI-extracted case facts (parties, issues, requests)")
 
 
 class ConversationSummary(BaseModel):
@@ -238,6 +245,7 @@ class ConversationMemoryManager:
             conversation.messages.append(message)
             conversation.total_messages += 1
             conversation.updated_at = datetime.utcnow()
+            conversation.last_interaction_at = datetime.utcnow()  # Update for session expiry tracking
             
             # Update conversation context
             await self._update_conversation_context(conversation, message)
@@ -262,6 +270,102 @@ class ConversationMemoryManager:
     async def get_conversation(self, conversation_id: str) -> Optional[ConversationContext]:
         """Get conversation by ID."""
         return self.active_conversations.get(conversation_id)
+    
+    async def check_session_expiry(self, conversation_id: str) -> bool:
+        """
+        Check if session has expired due to inactivity.
+        
+        Args:
+            conversation_id: Conversation identifier
+            
+        Returns:
+            True if session expired, False otherwise
+        """
+        try:
+            conversation = await self.get_conversation(conversation_id)
+            if not conversation:
+                return False
+            
+            # Calculate idle time in minutes
+            idle_time = datetime.utcnow() - conversation.last_interaction_at
+            idle_minutes = idle_time.total_seconds() / 60
+            
+            # Check against timeout setting
+            if idle_minutes > self.settings.session_idle_timeout_minutes:
+                logger.info(
+                    "Session expired due to inactivity",
+                    conversation_id=conversation_id,
+                    idle_minutes=round(idle_minutes, 2),
+                    timeout_threshold=self.settings.session_idle_timeout_minutes
+                )
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error("Session expiry check failed", error=str(e), conversation_id=conversation_id)
+            return False
+    
+    async def reset_session(self, conversation_id: str) -> None:
+        """
+        Reset session to start fresh conversation while preserving user profile.
+        
+        Creates new topic_id, clears case_facts and messages, but keeps
+        language preferences and user patterns.
+        
+        Args:
+            conversation_id: Conversation identifier
+        """
+        try:
+            conversation = await self.get_conversation(conversation_id)
+            if not conversation:
+                logger.warning("Cannot reset non-existent session", conversation_id=conversation_id)
+                return
+            
+            # Generate new topic ID
+            conversation.topic_id = f"topic-{int(datetime.utcnow().timestamp())}"
+            
+            # Clear session-specific data
+            conversation.case_facts = {}
+            conversation.messages = []
+            conversation.total_messages = 0
+            conversation.topics = []
+            conversation.categories = []
+            conversation.resolution_attempts = 0
+            conversation.escalation_triggers = []
+            
+            # Reset timestamps
+            conversation.last_interaction_at = datetime.utcnow()
+            conversation.updated_at = datetime.utcnow()
+            
+            # Keep: language_preference, interaction_patterns, user_sentiment
+            conversation.state = ConversationState.ACTIVE
+            
+            logger.info(
+                "Session reset completed",
+                conversation_id=conversation_id,
+                new_topic_id=conversation.topic_id,
+                language_preserved=conversation.language_preference
+            )
+            
+        except Exception as e:
+            logger.error("Session reset failed", error=str(e), conversation_id=conversation_id)
+    
+    async def update_last_interaction(self, conversation_id: str) -> None:
+        """
+        Update last interaction timestamp for session expiry tracking.
+        
+        Args:
+            conversation_id: Conversation identifier
+        """
+        try:
+            conversation = await self.get_conversation(conversation_id)
+            if conversation:
+                conversation.last_interaction_at = datetime.utcnow()
+                conversation.updated_at = datetime.utcnow()
+                
+        except Exception as e:
+            logger.error("Failed to update last interaction", error=str(e), conversation_id=conversation_id)
     
     async def get_conversation_context(
         self,
@@ -294,7 +398,9 @@ class ConversationMemoryManager:
                 "categories": conversation.categories,
                 "total_messages": conversation.total_messages,
                 "resolution_attempts": conversation.resolution_attempts,
-                "session_duration_minutes": self._calculate_session_duration(conversation)
+                "session_duration_minutes": self._calculate_session_duration(conversation),
+                "topic_id": conversation.topic_id,
+                "case_facts": conversation.case_facts  # NEW: Include case facts for context-aware responses
             }
             
             # Include recent messages if requested

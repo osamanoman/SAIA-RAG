@@ -755,8 +755,56 @@ async def process_chat_request_whatsapp(
     logger.info("Starting WhatsApp RAG processing pipeline", query=query, conversation_id=conversation_id)
 
     try:
-        # Get RAG service
+        # Get services
         rag_service = get_rag_service()
+        conversation_manager = rag_service.conversation_manager
+        query_processor = rag_service.query_processor
+        
+        # Session management logic
+        if conversation_id:
+            # Check for explicit reset commands
+            reset_commands = ["ابدأ من جديد", "جديد", "قضية جديدة", "/reset", "reset", "new case"]
+            if any(cmd in query.lower() for cmd in reset_commands):
+                await conversation_manager.reset_session(conversation_id)
+                logger.info("Session reset by user command", conversation_id=conversation_id)
+                return {
+                    "response": "تم البدء في محادثة جديدة. كيف يمكنني مساعدتك؟",
+                    "confidence": 1.0,
+                    "sources": [],
+                    "sources_count": 0,
+                    "processing_time_ms": 0,
+                    "tokens_used": None
+                }
+            
+            # Check for session expiry
+            session_expired = await conversation_manager.check_session_expiry(conversation_id)
+            if session_expired:
+                await conversation_manager.reset_session(conversation_id)
+                logger.info("Session expired and reset", conversation_id=conversation_id)
+                # Continue processing as new session
+            
+            # AI-powered case fact extraction (if enabled and message is long enough)
+            conversation = await conversation_manager.get_conversation(conversation_id)
+            if conversation:
+                # Extract case facts from first substantial message
+                is_new_session = conversation.total_messages == 0
+                is_long_message = len(query.split()) >= 20
+                
+                if is_new_session and is_long_message and settings.enable_ai_case_extraction:
+                    logger.info(
+                        "Attempting AI case fact extraction",
+                        conversation_id=conversation_id,
+                        word_count=len(query.split())
+                    )
+                    case_facts = await query_processor.extract_case_facts_ai(query)
+                    if case_facts:
+                        conversation.case_facts = case_facts
+                        logger.info(
+                            "Case facts stored",
+                            conversation_id=conversation_id,
+                            has_parties=bool(case_facts.get("parties")),
+                            num_issues=len(case_facts.get("legal_issues", []))
+                        )
 
         # Use WhatsApp channel for proper formatting and cleaning
         rag_result = await rag_service.generate_response(

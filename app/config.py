@@ -139,6 +139,21 @@ class Settings(BaseSettings):
         alias="ENABLE_CONVERSATION_MEMORY",
         description="Enable conversation context memory for multi-turn interactions"
     )
+    session_idle_timeout_minutes: int = Field(
+        default=45,
+        alias="SESSION_IDLE_TIMEOUT_MINUTES",
+        description="Minutes of inactivity before starting new session"
+    )
+    enable_ai_case_extraction: bool = Field(
+        default=True,
+        alias="ENABLE_AI_CASE_EXTRACTION",
+        description="Enable AI-powered case fact extraction from messages"
+    )
+    session_context_window_size: int = Field(
+        default=15,
+        alias="SESSION_CONTEXT_WINDOW_SIZE",
+        description="Number of recent messages to include in context window"
+    )
     support_categories: list[str] = Field(
         default=["troubleshooting", "billing", "setup", "general", "policies"],
         alias="SUPPORT_CATEGORIES",
@@ -220,6 +235,22 @@ class Settings(BaseSettings):
         """Validate maximum response tokens."""
         if v < 50 or v > 2000:
             raise ValueError("Max response tokens must be between 50 and 2000")
+        return v
+    
+    @field_validator("session_idle_timeout_minutes")
+    @classmethod
+    def validate_session_idle_timeout_minutes(cls, v: int) -> int:
+        """Validate session idle timeout."""
+        if v < 5 or v > 480:  # 5 minutes to 8 hours
+            raise ValueError("Session idle timeout must be between 5 and 480 minutes")
+        return v
+    
+    @field_validator("session_context_window_size")
+    @classmethod
+    def validate_session_context_window_size(cls, v: int) -> int:
+        """Validate session context window size."""
+        if v < 5 or v > 50:
+            raise ValueError("Session context window size must be between 5 and 50 messages")
         return v
     
     @field_validator("embed_dim")
