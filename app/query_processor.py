@@ -436,12 +436,18 @@ class QueryProcessor:
             True if query appears to be a follow-up
         """
         # Short queries are likely follow-ups
-        if len(query.split()) <= 5:
+        if len(query.split()) <= 8:  # Increased from 5 to 8 words
             # Check for follow-up indicators
             follow_up_indicators = [
                 "اكمل",  # Complete/Continue
                 "استمر",  # Continue
                 "أكمل",  # Complete (alternative spelling)
+                "كمل",  # Complete (short form)
+                "هل هذا كل شئ",  # Is that all?
+                "هل هذا كل شيء",  # Is that all? (alternative spelling)
+                "هذا كل شئ",  # That's all?
+                "هل انتهيت",  # Are you done?
+                "وماذا أيضا",  # And what else?
                 "ماذا عن",  # What about
                 "والحضانة",  # And custody
                 "والنفقة",  # And alimony
@@ -451,6 +457,8 @@ class QueryProcessor:
                 "كذلك",  # As well
                 "بالنسبة",  # Regarding
                 "وماذا",  # And what
+                "ماذا بعد",  # What next?
+                "وبعد ذلك",  # And after that?
                 "كم المدة",  # How long
                 "كم المبلغ",  # How much (amount)
                 "كم",  # How much/How many
@@ -459,6 +467,11 @@ class QueryProcessor:
                 "كيف",  # How
                 "هل",  # Is/Does
                 "لماذا",  # Why
+                "وهل",  # And is/does
+                "وكم",  # And how much
+                "وماذا عن",  # And what about
+                "والمزيد",  # And more
+                "أريد المزيد",  # I want more
             ]
 
             for indicator in follow_up_indicators:

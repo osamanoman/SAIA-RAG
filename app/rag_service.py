@@ -378,16 +378,32 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
             # Step 1: AI-powered query classification (with conversation context)
             classification = await self._classify_query(query, conversation_context)
 
-            # Only treat as conversational if there's NO conversation history
-            # If there's history, short queries like "اكمل" are likely domain-specific
-            if classification.query_type == QueryType.CONVERSATIONAL and not has_conversation_history:
-                # Handle conversational queries without RAG  
+            # CRITICAL DECISION LOGIC:
+            # - If conversational + NO history → Conversational response
+            # - If conversational + HAS history → Force domain-specific (follow-up)
+            # - If domain-specific → Always use RAG
+            
+            # Safety check: Short queries (<8 words) with history are ALWAYS domain-specific
+            query_word_count = len(query.split())
+            if has_conversation_history and query_word_count <= 8:
+                if classification.query_type == QueryType.CONVERSATIONAL:
+                    logger.info(
+                        "FORCED reclassification: Short query with history",
+                        query=query[:50],
+                        word_count=query_word_count,
+                        has_history=True,
+                        original_classification="conversational"
+                    )
+                # Force domain-specific by NOT returning early
+            elif classification.query_type == QueryType.CONVERSATIONAL and not has_conversation_history:
+                # True conversational query without history → Direct response
                 conversational_response = await self._generate_conversational_response(query)
                 processing_time = int((datetime.utcnow() - start_time).total_seconds() * 1000)
                 logger.info(
                     "Conversational query handled",
                     query=query[:50],
-                    reasoning=classification.reasoning
+                    reasoning=classification.reasoning,
+                    has_history=False
                 )
 
                 return {
@@ -401,13 +417,6 @@ Remember: You're an intelligent assistant, not a rigid bot. Be helpful, honest a
                     "preprocessing_steps": ["ai_query_classification", "conversational_response"],
                     "conversation_aware": False
                 }
-            elif classification.query_type == QueryType.CONVERSATIONAL and has_conversation_history:
-                # Query classified as conversational BUT has history → treat as domain-specific
-                logger.info(
-                    "Query reclassified as domain-specific due to conversation history",
-                    query=query[:50],
-                    original_classification="conversational"
-                )
 
             # Step 1: Process and enhance query if enabled (CONSISTENT CHANNEL)
             if self.settings.enable_query_enhancement:
